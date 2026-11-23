@@ -149,7 +149,9 @@ static const char* thingsos_network_ssid(void) {return THINGSOS_AP_SSID;}
 static const char* thingsos_network_password(void) {return THINGSOS_AP_PASSWORD;}
 static const char* thingsos_network_token(void) {return "0123456789abcdef0123456789abcdef";}
 static bool host_network_connected, host_network_busy;
-static bool thingsos_network_connected(void) {return host_network_connected;}
+static bool host_wifi_enabled=true;
+static bool thingsos_network_wifi_enabled(void) {return host_wifi_enabled;}
+static bool thingsos_network_connected(void) {return host_wifi_enabled && host_network_connected;}
 static bool thingsos_network_busy(void) {return host_network_busy;}
 static thingsos_release_state_t host_release;
 static bool host_release_checking;
@@ -166,7 +168,7 @@ static unsigned host_wifi_disconnects;
 static int host_wifi_disconnect_error;
 static int thingsos_network_disconnect(void) {
     ++host_wifi_disconnects;if(host_wifi_disconnect_error)return host_wifi_disconnect_error;
-    host_network_connected=false;return 0;
+    host_wifi_enabled=false;host_network_connected=false;return 0;
 }
 static bool host_http_requested;
 static void thingsos_network_service(bool b) {host_http_requested=b;}
@@ -174,7 +176,7 @@ static int thingsos_network_service_poll(void) {return 0;}
 static void thingsos_network_auto_time(bool b) {(void)b;}
 static void thingsos_network_library(const char* p) {(void)p;}
 static unsigned host_wifi_connects;
-static int thingsos_network_connect(const char* s,const char* p) {(void)s;(void)p;++host_wifi_connects;return 0;}
+static int thingsos_network_connect(const char* s,const char* p) {(void)s;(void)p;++host_wifi_connects;host_wifi_enabled=true;return 0;}
 static unsigned host_wifi_scans,host_wifi_polls;
 static bool host_wifi_scan_ready;
 static int host_wifi_scan_start_error,host_wifi_scan_result_error;

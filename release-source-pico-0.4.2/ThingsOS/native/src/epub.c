@@ -930,6 +930,7 @@ bool thingsos_epub_chapter(thingsos_epub_t* e, size_t index, thingsos_chapter_t*
         return false;
     }
     size_t range_start=0,range_end=SIZE_MAX;
+    char heading_tag=0;
     const char* start_id=e->chapter_fragments?e->chapter_fragments[index]:"";
     const char* end_id=e->chapter_fragments && index+1<e->spine_count && e->spine[index+1]==e->spine[index]
         ? e->chapter_fragments[index+1] : "";
@@ -973,7 +974,11 @@ bool thingsos_epub_chapter(thingsos_epub_t* e, size_t index, thingsos_chapter_t*
         if(!t.close) {
             char id[160];
             if(attr(&t,"id",id,sizeof(id)) || attr(&t,"name",id,sizeof(id))) {
-                if(start_id[0] && !strcmp(id,start_id)){range_start=c->bytes;c->heading=false;c->heading_start=c->heading_end=0;}
+                if(start_id[0] && !strcmp(id,start_id)) {
+                    range_start=c->bytes;
+                    c->heading=false;c->heading_start=c->heading_end=0;
+                    heading_tag=0;
+                }
                 if(end_id[0] && !strcmp(id,end_id))range_end=c->bytes;
             }
         }
@@ -1037,10 +1042,21 @@ bool thingsos_epub_chapter(thingsos_epub_t* e, size_t index, thingsos_chapter_t*
                 c->text[c->bytes++] = '\n';
         }
         if(t.name[0]=='h' && t.name[1]>='1' && t.name[1]<='6' && !t.name[2]) {
-            if(!t.close && !c->heading) {c->heading=true;c->heading_start=c->bytes;c->heading_end=c->bytes;}
-            else if(t.close && c->heading && c->heading_end==c->heading_start) c->heading_end=c->bytes;
+            if(!t.close && !t.self && !c->heading && !heading_tag && range_end==SIZE_MAX &&
+               header_space(c->text,range_start,c->bytes)==c->bytes) {
+                heading_tag=t.name[1];
+                c->heading_start=c->bytes;
+            } else if(t.close && heading_tag==t.name[1]) {
+                heading_tag=0;
+                /* End before any following block separator. This is also the
+                   exact boundary used by cached_header and source offsets. */
+                c->heading_end=c->bytes;
+                c->heading=header_space(c->text,c->heading_start,c->heading_end)<c->heading_end;
+                if(!c->heading)c->heading_start=c->heading_end=0;
+            }
         }
     }
+    if(heading_tag)c->heading_start=c->heading_end=0;
     if(range_end>c->bytes)range_end=c->bytes;
     if(range_start>range_end)range_start=0;
     c->source_start=range_start;

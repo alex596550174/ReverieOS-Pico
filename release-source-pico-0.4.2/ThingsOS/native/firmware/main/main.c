@@ -50,6 +50,7 @@ static void cover_retry_clear(void);
 #include "qrcodegen.h"
 #include "thingsos/files.h"
 #include "thingsos/graphics.h"
+#include "thingsos/home_ui.h"
 #include "thingsos/diagnostics.h"
 #include "thingsos/ble_discovery.h"
 #include "thingsos/cubox.h"
@@ -105,7 +106,7 @@ typedef struct {
     thingsos_ui_page_t page;
     uint64_t book_id,retry_at;
     char active_book[64];
-    bool cloud;
+    bool cloud, previous_page;
     uint32_t cloud_offset;
     thingsos_wd_note_t* note;
 } weidu_online_state_t;
@@ -181,6 +182,7 @@ typedef struct {
     int shelf_cover_x,shelf_cover_y,shelf_cover_w,shelf_cover_h;
     thingsos_ui_page_t lock_return;
     thingsos_ui_page_t menu_root,reader_menu_root;
+    thingsos_ui_page_t stats_return,reader_return;
     thingsos_ui_page_t transfer_return,wifi_return,logs_return;
     thingsos_ui_page_t controls_origin,controls_detail;
     bool controls_open,controls_refresh;
@@ -402,6 +404,11 @@ static bool input_uses_qwerty(void);
 static void wifi_password_update(bool layout);
 static void wifi_scan(bool force);
 static size_t feature_book(uint64_t);
+static size_t feature_path(const char*,const char*);
+static void feature_recent(void);
+static bool weidu_back_visible(void);
+static thingsos_ui_page_t unlock_target(void);
+static void feature_add_mark(void);
 static void feature_toggle_mark(void);
 static time_t wall_time(void);
 static void navigate(thingsos_ui_page_t);
@@ -449,6 +456,8 @@ static void reader_annotations_close(void);
 static void pagination_checkpoint(void);
 static bool online_open(const thingsos_weidu_book_t*);
 static void online_need(unsigned);
+static void online_previous_page(unsigned);
+static void chapter_seek_last_page(void);
 static void online_loaded(unsigned);
 static void online_close(void);
 static void online_poll(void);
@@ -698,7 +707,13 @@ static bool reader_restore_source(unsigned source,size_t offset) {
     }
     return false;
 }
+static bool reader_library_page(thingsos_ui_page_t page) {
+    return page==THINGSOS_UI_HOME || page==THINGSOS_UI_LIBRARY || page==THINGSOS_UI_RECENT;
+}
 static bool open_book(size_t index) {
+    thingsos_ui_page_t origin = app.page;
+    if (origin == THINGSOS_UI_WEIDU && app.weidu_detail && reader_library_page(app.weidu_detail_return))
+        origin = app.weidu_detail_return;
     app.reader_from_files=false;
     uint64_t open_at=now(),released_at,content_at,records_at;
     app.reader_from_weidu=false;
@@ -799,7 +814,8 @@ static bool open_book(size_t index) {
         }
         if(!app.epub_open && restored_offset<app.chapter.bytes) app.start=restored_offset;
     }
-    app.reader_menu_root=app.menu_root;
+    app.reader_return=reader_library_page(origin)?origin:THINGSOS_UI_HOME;
+    app.reader_menu_root=reader_library_page(origin)?THINGSOS_UI_HOME:app.menu_root;
     app.opened = true;
     app.toc_pending=app.epub_open;
     app.toc_invalidate_pending=false;
@@ -889,7 +905,7 @@ static size_t library_hit(int x, int y) {
     if (y >= 330 && y < 600) return library_hero();
     return y >= 620 && y < 1070 ? library_row(app.list_start + (size_t)(y - 620) / 150) : app.book_count;
 }
-static const unsigned reader_lines[] = { 125, 145, 175 }, reader_margins[] = { 12, 24, 36 };
+static const unsigned reader_lines[] = { 125, 145, 175 }, reader_margins[] = { 24, 36, 54 };
 static int reader_width(void) {return app.landscape_enabled?1216:684;}
 static int reader_height(void) {return app.landscape_enabled?684:1216;}
 static int reader_body_top(void) {return app.immersive_enabled?12:90;}
@@ -910,12 +926,7 @@ static bool reader_touch_coordinates(int* x,int* y) {
 static unsigned reader_body_margin(void) {
     return reader_margins[app.margin_choice < 3 ? app.margin_choice : 1];
 }
-static int reader_body_left(void) {
-    /* Optical correction: the left-aligned text block looked left-heavy on the
-       panel. Keep its line width and shift the whole body 12 px to the right. */
-    int margin = (int)reader_body_margin();
-    return margin + (!app.vertical_enabled && margin == 12 ? 0 : 12);
-}
+static int reader_body_left(void) {return (int)reader_body_margin();}
 static int reader_body_width(void) {
     return reader_width() - 2 * (int)reader_body_margin();
 }
@@ -937,8 +948,8 @@ static int reader_content_width(const thingsos_chapter_t* chapter) {
 }
 static int reader_hanging(const thingsos_chapter_t* chapter) {
     int room = reader_width() - reader_content_left(chapter) - reader_content_width(chapter) - 4;
-    int half = (int)app.px / 2;
-    return room < 0 ? 0 : room < half ? room : half;
+    int limit = (int)app.px * 3 / 5;
+    return room < 0 ? 0 : room < limit ? room : limit;
 }
 /* First-line indent in pixels; zero leaves the source paragraph layout alone. */
 static bool reader_epub_paragraphs(void) {return app.epub_open && !app.epub.plain_text;}
@@ -1024,6 +1035,15 @@ static void pagination_checkpoint(void) {
             app.pagination_chapter,(unsigned)app.pagination_done_pages);
     }
 }
+static void reader_layout_changed(void) {
+    pagination_checkpoint();
+    app.history_count = 0;
+    app.pagination_started = app.pagination_valid = app.pagination_failed = false;
+    app.page_cache_key = 0;
+    app.page_cache_path[0] = 0;
+    reader_cache_clear();
+}
+
 static bool pagination_prepare(void) {
     if (!app.opened) return false;
     app.font.monochrome=app.refresh_mode==1;
@@ -1035,6 +1055,7 @@ static bool pagination_prepare(void) {
         app.indexed_indent != app.indent_chars || app.indexed_landscape!=app.landscape_enabled || app.indexed_immersive!=app.immersive_enabled ||
         app.indexed_vertical!=app.vertical_enabled || app.indexed_monochrome!=(app.refresh_mode==1)) {
         pagination_checkpoint();
+        app.history_count = 0;
         if (app.pagination_text) {
             thingsos_chapter_close(app.pagination_text);
             free(app.pagination_text);
@@ -1053,11 +1074,12 @@ static bool pagination_prepare(void) {
         app.indexed_weight = app.weight_choice;
         app.indexed_indent = app.indent_chars;app.indexed_landscape=app.landscape_enabled;app.indexed_immersive=app.immersive_enabled;app.indexed_monochrome=app.refresh_mode==1;
         app.indexed_vertical=app.vertical_enabled;
-        uint64_t key=14695981039346656037ULL;
-    /* Synthetic weight changes coverage only; hinted advances and page breaks
-       stay identical, so preserve the existing whole-book position index. */
-    unsigned layout[]={app.epub.plain_text?21u:app.epub_open?20u:19u,app.px,app.line_choice,app.margin_choice,app.indent_chars,(unsigned)reader_width(),(unsigned)reader_body_height()};
-        key=cache_hash(key,layout,sizeof(layout));
+        /* Synthetic weight changes coverage only. Hinted advances and page
+           breaks stay identical, so weight is absent from the index key. */
+        const unsigned version = app.epub.plain_text ? THINGSOS_LAYOUT_SECTIONED_TEXT :
+                                 app.epub_open ? THINGSOS_LAYOUT_EPUB : THINGSOS_LAYOUT_TEXT;
+        uint64_t key = thingsos_page_layout_key(version, app.px, app.line_choice, app.margin_choice,
+            app.indent_chars, (unsigned)reader_width(), (unsigned)reader_body_height());
         const uint32_t flow=app.vertical_enabled?0x56525432u:0x48525a31u;
         key=cache_hash(key,&flow,sizeof(flow));
         if(app.refresh_mode==1) {const uint32_t glyph_mode=0x4d4f4e4f;key=cache_hash(key,&glyph_mode,sizeof(glyph_mode));}
@@ -1226,6 +1248,12 @@ static bool paginate(void) {
 #endif
 static size_t current_page(void) {
     return thingsos_page_find(app.pages, app.page_count, app.chapter_index, (uint32_t)app.start);
+}
+static size_t previous_indexed_page(void) {
+    size_t page = current_page();
+    if (page < app.page_count && app.pages[page].chapter == app.chapter_index &&
+        app.pages[page].offset < app.start) return page;
+    return page ? page - 1 : app.page_count;
 }
 static unsigned book_progress(void) {
     if (app.pagination_valid)
@@ -1488,15 +1516,22 @@ static void paint_image_scaled(
     if (!c) return;
     paint_image_scaled_clipped(c, pixels, w, h, x, y, ow, oh, 0, 0, c->width, c->height, smooth);
 }
-static void paint_image_fit(
+static void paint_image_fit_box(
     thingsos_canvas_t* c, const unsigned char* pixels, unsigned w, unsigned h, int x, int y, int bw,
-    int bh, bool upscale, bool smooth) {
+    int bh, bool upscale, bool smooth, thingsos_rect_t* out_box) {
     if (!c || !c->pixels || c->width<=0 || c->height<=0 || !pixels || bw<=0 || bh<=0) return;
     thingsos_size_t fit;
     bool fitted=upscale?thingsos_image_contain(w,h,bw,bh,&fit):thingsos_image_fit(w,h,bw,bh,&fit);
     if(!fitted)return;
-    paint_image_scaled(c,pixels,w,h,x+(bw-(int)fit.width)/2,y+(bh-(int)fit.height)/2,
-                       fit.width,fit.height,smooth);
+    thingsos_rect_t box = {x+(bw-(int)fit.width)/2, y+(bh-(int)fit.height)/2,
+                           (int)fit.width, (int)fit.height};
+    paint_image_scaled(c,pixels,w,h,box.x,box.y,fit.width,fit.height,smooth);
+    if(out_box)*out_box=box;
+}
+static void paint_image_fit(
+    thingsos_canvas_t* c, const unsigned char* pixels, unsigned w, unsigned h, int x, int y, int bw,
+    int bh, bool upscale, bool smooth) {
+    paint_image_fit_box(c,pixels,w,h,x,y,bw,bh,upscale,smooth,NULL);
 }
 /* Aspect-fill for full-bleed wallpaper and cards: scale by the larger axis and
    center-crop the overflow strictly inside the target box. */
@@ -1514,10 +1549,6 @@ static void paint_image_cover(
     if(!oh)oh=1;
     paint_image_scaled_clipped(c,pixels,w,h,x+((int)bw-(int)ow)/2,y+((int)bh-(int)oh)/2,ow,oh,
                                x,y,x+bw,y+bh,smooth);
-}
-static void paint_image(thingsos_canvas_t* c,const unsigned char* pixels,unsigned w,unsigned h,
-                        int x,int y,int bw,int bh) {
-    paint_image_fit(c,pixels,w,h,x,y,bw,bh,false,false);
 }
 static void label(const char* text, int x, int baseline, unsigned size, int width) {
     thingsos_font_size(ui_font(), size);
@@ -1582,8 +1613,8 @@ static bool picture(
 #define COVER_HEIGHT 188u
 #define cover_retry (app.cover_retry)
 static void cover_retry_clear(void) {memset(cover_retry,0,sizeof(cover_retry));}
-static void cover_paint(const thingsos_thumbnail_t* cover,int x,int y,int w,int h) {
-    paint_image_fit(&app.canvas,cover->pixels,cover->width,cover->height,x,y,w,h,true,false);
+static void cover_paint(const thingsos_thumbnail_t* cover,int x,int y,int w,int h,thingsos_rect_t* drawn) {
+    paint_image_fit_box(&app.canvas,cover->pixels,cover->width,cover->height,x,y,w,h,true,false,drawn);
 }
 static bool cover_has_content(const unsigned char* pixels,unsigned w,unsigned h) {
     if(!pixels || !w || !h)return false;
@@ -1592,12 +1623,14 @@ static bool cover_has_content(const unsigned char* pixels,unsigned w,unsigned h)
     return false;
 }
 #include "thumbnail_ui.inc"
-static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source,bool original) {
+static bool cover_from_mode_rect(book_t* b,int x,int y,int w,int h,const char* source,bool original,
+                                 thingsos_rect_t* drawn) {
+    if(drawn)*drawn=(thingsos_rect_t){x,y,w,h};
     const thingsos_thumbnail_t* cached = original?NULL:thingsos_thumbnail_find(&app.thumbnails, b->id, COVER_WIDTH, COVER_HEIGHT);
     uint64_t cover_version=original?0:lock_cover_stamp(b,source);
     if(cached && cached->version && cover_version && cached->version!=cover_version)cached=NULL;
     if (cached && (cached->pixels ? cover_has_content(cached->pixels,cached->width,cached->height) : !source)) {
-        if (cached->pixels) cover_paint(cached,x,y,w,h);
+        if (cached->pixels) cover_paint(cached,x,y,w,h,drawn);
         else {
             thingsos_rect(&app.canvas, x, y, w, h, 225);
             label(b->name, x + 6, y + 36, 22, w - 12);
@@ -1605,7 +1638,7 @@ static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source
         return cached->pixels!=NULL;
     }
     if(!original && (cached=thumbnail_disk_load(b,source))!=NULL) {
-        cover_paint(cached,x,y,w,h);return true;
+        cover_paint(cached,x,y,w,h,drawn);return true;
     }
     uint64_t retry_key=cache_hash(b->id,source?source:"",source?strlen(source):0);
     retry_key=cache_hash(retry_key,&cover_version,sizeof(cover_version));
@@ -1693,10 +1726,10 @@ static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source
     uint64_t scale_at = now();
     free(raw);raw=NULL;
     if(original) {
-        if(ok)paint_image_fit(&app.canvas,pixels,iw,ih,x,y,w,h,true,true);
+        if(ok)paint_image_fit_box(&app.canvas,pixels,iw,ih,x,y,w,h,true,true,drawn);
         else {
             cached=thingsos_thumbnail_find(&app.thumbnails,b->id,COVER_WIDTH,COVER_HEIGHT);
-            if(cached && cached->pixels)cover_paint(cached,x,y,w,h);
+            if(cached && cached->pixels)cover_paint(cached,x,y,w,h,drawn);
             else {thingsos_rect(&app.canvas,x,y,w,h,225);label(b->name,x+6,y+36,22,w-12);}
         }
         ESP_LOGI("ThingsOS_cover","Wallpaper original=%d source=%ux%u target=%dx%d",ok,ok?iw:0,ok?ih:0,w,h);
@@ -1716,8 +1749,8 @@ static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source
     if(cached)thingsos_thumbnail_version(&app.thumbnails,b->id,COVER_WIDTH,COVER_HEIGHT,cover_version);
     if (ok) {
         if(cached)thumbnail_disk_save(b,source,cached);
-        if (cached) cover_paint(cached,x,y,w,h);
-        else paint_image(&app.canvas, pixels, iw, ih, x, y, w, h);
+        if (cached) cover_paint(cached,x,y,w,h,drawn);
+        else paint_image_fit_box(&app.canvas,pixels,iw,ih,x,y,w,h,false,false,drawn);
     }
     else {
         thingsos_rect(&app.canvas, x, y, w, h, 225);
@@ -1728,8 +1761,14 @@ static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source
     app.cover_scale_ms += (unsigned)(now()-scale_at);
     return ok;
 }
+static bool cover_from_mode(book_t* b,int x,int y,int w,int h,const char* source,bool original) {
+    return cover_from_mode_rect(b,x,y,w,h,source,original,NULL);
+}
+static bool cover_from_rect(book_t* b,int x,int y,int w,int h,const char* source,thingsos_rect_t* drawn) {
+    return cover_from_mode_rect(b,x,y,w,h,source,false,drawn);
+}
 static void cover_from(book_t* b,int x,int y,int w,int h,const char* source) {
-    cover_from_mode(b,x,y,w,h,source,false);
+    cover_from_rect(b,x,y,w,h,source,NULL);
 }
 #ifdef THINGSOS_HOST_UI
 static char host_lock_cache_root[512];
@@ -1775,20 +1814,129 @@ static bool cover_wallpaper(book_t* b) {
     memory_log("lock-cover-after");
     return shown;
 }
-static void cached_mark(int x,int y,int w,int h) {
-    int band = h < 160 ? 30 : 36;
-    /* Opaque ink band stays legible on every cover without hiding the title. */
-    thingsos_rect(&app.canvas,x,y+h-band,w,band,255);
-    thingsos_font_size(ui_font(),22);
-    centered_label("已缓存",x,y+h-(band-22)/2-4,22,w);
-    for(int row=y+h-band;row<y+h;++row) for(int col=x;col<x+w;++col)
-        app.canvas.pixels[(size_t)row*app.canvas.width+col]=255-app.canvas.pixels[(size_t)row*app.canvas.width+col];
+static void uncached_mark(int x, int y, int w, int h) {
+    int r = (w < 80 || h < 100) ? 11 : 14;
+    int pad = (w < 80 || h < 100) ? 5 : 7;
+    if (w < 2 * (r + pad) + 2 || h < 2 * (r + pad) + 2) return;
+    /* The extreme circle pixels sit exactly pad pixels from each edge. */
+    int cx = x + w - 1 - pad - r;
+    int cy = y + h - 1 - pad - r;
+    float outer = (float)r + 0.25f;
+    float inner = outer - 1.9f;
+    float half_len = r >= 14 ? 5.6f : 4.4f;
+    float tip_y = r >= 14 ? 5.4f : 4.2f;
+    float wing = r >= 14 ? 4.6f : 3.6f;
+    float stroke = r >= 14 ? 1.05f : 0.95f;
+    for (int dy = -r - 1; dy <= r + 1; ++dy) {
+        for (int dx = -r - 1; dx <= r + 1; ++dx) {
+            int px = cx + dx, py = cy + dy;
+            if (px < x || px >= x + w || py < y || py >= y + h) continue;
+            if (px < 0 || px >= app.canvas.width || py < 0 || py >= app.canvas.height) continue;
+            unsigned in_circle = 0, ink = 0;
+            for (int sy = 0; sy < 4; ++sy) {
+                for (int sx = 0; sx < 4; ++sx) {
+                    float fx = (float)dx + ((float)sx - 1.5f) * 0.25f;
+                    float fy = (float)dy + ((float)sy - 1.5f) * 0.25f;
+                    float dist2 = fx * fx + fy * fy;
+                    if (dist2 > outer * outer) continue;
+                    ++in_circle;
+                    bool black = dist2 >= inner * inner;
+                    if (!black && fx >= -stroke && fx <= stroke && fy >= -half_len && fy <= tip_y)
+                        black = true;
+                    if (!black && fy >= tip_y - wing - stroke && fy <= tip_y + stroke) {
+                        float ax = fx < 0 ? -fx : fx;
+                        float t = (ax + (tip_y - fy)) * 0.5f;
+                        if (t < 0.0f) t = 0.0f;
+                        if (t > wing) t = wing;
+                        float ex = ax - t, ey = (tip_y - fy) - t;
+                        if (ex * ex + ey * ey <= stroke * stroke) black = true;
+                    }
+                    if (black) ++ink;
+                }
+            }
+            if (!in_circle) continue;
+            unsigned char bg = app.canvas.pixels[(size_t)py * app.canvas.width + px];
+            unsigned char fg = (unsigned char)(255u - (ink * 255u) / in_circle);
+            unsigned char out = (unsigned char)(((unsigned)fg * in_circle + (unsigned)bg * (16u - in_circle) + 8u) / 16u);
+            thingsos_rect(&app.canvas, px, py, 1, 1, out);
+        }
+    }
 }
 static void cover(book_t* b,int x,int y,int w,int h) {
     char id[64],source[640];bool cached=thingsos_weidu_cache_id(b->path,id,sizeof(id));
     if(cached)snprintf(source,sizeof(source),"/sdcard/.thingsos/weidu/covers/%s.jpg",id);
-    cover_from(b,x,y,w,h,cached?source:NULL);if(cached)cached_mark(x,y,w,h);
+    cover_from(b,x,y,w,h,cached?source:NULL);
 }
+static size_t home_recent_book_index(uint64_t id, bool sd_ready) {
+    if (!id || id == 1) return SIZE_MAX;
+    for (size_t i=0; i<app.book_count; ++i)
+        if (app.books[i].id==id) return i;
+    if (!sd_ready || app.book_count >= BOOK_LIMIT) return SIZE_MAX;
+    const thingsos_book_record_t* record = thingsos_records_book(&app.records,id,NULL,NULL);
+    if (!record) return SIZE_MAX;
+    char cache_id[64], cached[THINGSOS_RECORD_PATH_BYTES];
+    const char* path = record->path;
+    if (thingsos_weidu_cache_id(path, cache_id, sizeof(cache_id)) &&
+        thingsos_weidu_cached("/sdcard/books", cache_id, cached, sizeof(cached))) path = cached;
+    struct stat info;
+    if (stat(path, &info) || !S_ISREG(info.st_mode) || identity(path)!=id) return SIZE_MAX;
+    size_t before = app.book_count;
+    size_t index = feature_path(path, record->title);
+    if (app.book_count != before) {
+        app.books[index].author[0] = 0;
+        app.library_order_valid = false;
+    }
+    return index;
+}
+
+static size_t home_recent_indices(size_t indices[THINGSOS_HOME_BOOK_LIMIT], bool sd_ready) {
+    size_t count = 0;
+    for (size_t i=0; i<app.recent_count && count<THINGSOS_HOME_BOOK_LIMIT; ++i) {
+        size_t index = home_recent_book_index(app.recent_ids[i], sd_ready);
+        if (index < app.book_count) indices[count++] = index;
+    }
+    return count;
+}
+
+static void home_cover(void* context, thingsos_canvas_t* canvas, size_t index, int x, int y, int w, int h) {
+    (void)canvas;
+    const size_t* indices = context;
+    cover(&app.books[indices[index]], x, y, w, h);
+}
+
+static void home_draw(void) {
+    thingsos_home_stats_t stats;
+    uint64_t elapsed = app.runtime.reading_ms;
+    thingsos_home_stats_build(&app.records, wall_time(), elapsed > app.accounted_ms ? elapsed-app.accounted_ms : 0, &stats);
+    bool sd_ready = media();
+    size_t indices[THINGSOS_HOME_BOOK_LIMIT];
+    size_t count = home_recent_indices(indices, sd_ready);
+    thingsos_home_book_t books[THINGSOS_HOME_BOOK_LIMIT] = {0};
+    char chapter[48];
+    for (size_t i=0; i<count; ++i) {
+        const book_t* book = &app.books[indices[i]];
+        const thingsos_book_record_t* record = thingsos_records_book(&app.records, book->id, NULL, NULL);
+        books[i] = (thingsos_home_book_t){book->name, book->author,
+            book->epub ? "EPUB" : thingsos_markdown_path(book->path) ? "MD" : "TXT",
+            record ? record->page : 0, record ? record->pages : 0, record ? record->percent : 0,
+            record && record->order};
+        if (i != 0) continue;
+        if (app.opened && app.runtime.location.book_id == book->id && app.epub_open &&
+            app.chapter_index < app.epub.spine_count && app.epub.chapter_names &&
+            app.epub.chapter_names[app.chapter_index][0]) {
+            books[i].subtitle = app.epub.chapter_names[app.chapter_index];
+        } else if (!book->author[0] && record && record->chapter) {
+            snprintf(chapter, sizeof(chapter), "第 %u 章", (unsigned)record->chapter);
+            books[i].subtitle = chapter;
+        }
+    }
+    unsigned scale = app.font.ui_size_percent, weight = app.font.ui_weight_override;
+    app.font.ui_size_percent = app.font.ui_weight_override = 0;
+    thingsos_home_draw(ui_font(), &app.canvas, &stats, books, count, sd_ready, home_cover, indices);
+    app.font.ui_size_percent = scale;
+    app.font.ui_weight_override = weight;
+}
+
 static void nav(void) {
     unsigned active = app.page == THINGSOS_UI_WEIDU                                      ? 1
                       : app.page == THINGSOS_UI_APPS || app.page == THINGSOS_UI_TRANSFER ||
@@ -1799,7 +1947,7 @@ static void nav(void) {
                         (app.menu_root == THINGSOS_UI_APPS &&
                          (app.page == THINGSOS_UI_WIFI || app.page == THINGSOS_UI_FILES ||
                           app.page == THINGSOS_UI_LOGS)) ? 2
-                      : app.page == THINGSOS_UI_LIBRARY || app.page == THINGSOS_UI_FILES || app.page==THINGSOS_UI_RECENT ? 0
+                      : reader_library_page(app.page) || app.page == THINGSOS_UI_FILES ? 0
                                                                                          : 3;
     thingsos_draw_nav(ui_font(), &app.canvas, active);
 }
@@ -1807,7 +1955,9 @@ static void header(const char* title) {
     bool back = app.page != THINGSOS_UI_LIBRARY && app.page != THINGSOS_UI_RECENT &&
                 app.page != THINGSOS_UI_WEIDU &&
                 app.page != THINGSOS_UI_SETTINGS && app.page != THINGSOS_UI_APPS;
-    if (back) label("<", 36, 155, 36, 60);
+    bool show_back = back || app.page == THINGSOS_UI_LIBRARY ||
+        (app.page == THINGSOS_UI_WEIDU && weidu_back_visible());
+    if (show_back) label("<", 36, 155, 36, 60);
     if (app.page == THINGSOS_UI_FILES || app.page == THINGSOS_UI_WIFI ||
         app.page == THINGSOS_UI_PASSWORD || app.page == THINGSOS_UI_TRANSFER ||
         app.page == THINGSOS_UI_CUBOX || app.page == THINGSOS_UI_FLOMO)
@@ -1894,7 +2044,8 @@ static void reader_more_draw(void) {
     unsigned scale=app.font.ui_size_percent,weight=app.font.ui_weight_override;
     app.font.ui_size_percent=app.font.ui_weight_override=0;thingsos_font_weight(&app.font,0);
     bool wide=reader_landscape_frame();int width=reader_more_row_width(),hint=wide?88:94,separator=wide?94:110;
-    label("<",36,150,30,60);centered_label("更多",96,154,34,app.canvas.width-192);
+    label("<",36,150,30,60);label("更多",108,154,34,200);
+    reader_control("阅读字体",app.canvas.width-352,100,156,false);
     reader_control(app.vertical_enabled?"竖排开":"竖排关",app.canvas.width-182,100,146,app.vertical_enabled);
     thingsos_rect(&app.canvas,36,wide?180:198,app.canvas.width-72,1,180);
     for(unsigned interval=0;interval<2;++interval) {
@@ -2057,76 +2208,111 @@ static int status_centered_baseline(unsigned size, const char* ref_text, int max
     if (base > 66) base = 66;
     return base;
 }
+static int status_title_width(const char* title) {
+    int advance=0, left=0, right=0;
+    thingsos_text_ink_box(ui_font(),title,0,&left,&right,NULL,NULL,&advance);
+    int ink_width=right-left+1;
+    return ink_width>advance?ink_width:advance;
+}
+static unsigned status_fit_title(char* title,size_t capacity,int max_w) {
+    if(max_w<=24 || capacity<4 || !title[0])return 0;
+    size_t n=strnlen(title,capacity);
+    if(n==capacity)return 0;
+    thingsos_font_size(ui_font(),24);
+    if(status_title_width(title)<=max_w)return 24;
+    thingsos_font_size(ui_font(),20);
+    if(status_title_width(title)<=max_w)return 20;
+    while(n) {
+        do {--n;} while(n && ((unsigned char)title[n]&0xc0)==0x80);
+        if(capacity-n<sizeof("..."))continue;
+        memcpy(title+n,"...",sizeof("..."));
+        if(status_title_width(title)<=max_w)return 20;
+    }
+    return 0;
+}
 static void draw_status(void) {
     /* A full UI frame already draws the latest state; do not scan it twice. */
     app.power_status_pending=false;
     if(app.page==THINGSOS_UI_READING && app.immersive_enabled && !(app.annotation_open && app.annotation_list) &&
        !app.wd_notes_open && !app.wd_consent && !app.wd_cloud_prompt)return;
     bool prior_monochrome=app.font.monochrome;
+    unsigned prior_scale=app.font.ui_size_percent;
+    app.font.ui_size_percent=0;
     app.font.monochrome=app.page!=THINGSOS_UI_SYSTEM &&
         (reader_surface(app.page)?app.refresh_mode:app.ui_refresh_mode)==1;
-    const int status_cy=37;
-    const int bat_top=26, wifi_top=26;
-    int shift=app.canvas.width-684;
-    int bat_left=612+shift;
+    enum { BAT_W=54 };
+    const int status_cy=37, bat_top=26;
     thingsos_rect(&app.canvas,0,0,app.canvas.width,74,255);
-    if(app.page != THINGSOS_UI_READING) {
-        int brand_base=status_centered_baseline(28,"TOS",250,status_cy,47);
-        label("ThingsOS", 36, brand_base, 28, 250);
-    }
-    char status[96];
-    snprintf(status, sizeof(status), "%u%%", app.battery);
-    int bat_base=status_centered_baseline(24,"0%",136,status_cy,45);
-    int ink_l=0, ink_r=0, wifi_left=bat_left-114;
-    if(thingsos_text_ink_box(ui_font(),status,136,&ink_l,&ink_r,NULL,NULL,NULL)) {
-        /* 8 px ink gap between percentage text and battery; 12 px between Wi-Fi and text. */
-        int text_x=bat_left-9-ink_r;
-        int num_ink_left=text_x+ink_l;
-        wifi_left=num_ink_left-46;
-        int min_wifi=456+shift;
-        if(wifi_left<min_wifi)wifi_left=min_wifi;
-        if(num_ink_left<wifi_left+38) {
-            int max_w=bat_left-9-(wifi_left+38)+ink_r-ink_l+1;
-            thingsos_label(ui_font(),&app.canvas,status,wifi_left+38-ink_l,bat_base,max_w>0?max_w:1);
-        } else {
-            thingsos_label(ui_font(),&app.canvas,status,text_x,bat_base,136);
+    time_t clock=wall_time();
+    struct tm date;
+    char time_str[16];
+    bool clock_ready=clock>=1577836800 && localtime_r(&clock,&date) &&
+        strftime(time_str,sizeof(time_str),"%H:%M",&date);
+    if(app.page==THINGSOS_UI_READING) {
+        int body_l=reader_body_left(), body_r=body_l+reader_body_width();
+        int bat_left=body_r-BAT_W;
+        status_battery_draw(bat_left,bat_top,app.battery,app.charge_connected);
+        int time_right=body_l;
+        int t_l,t_r;
+        int time_base=status_centered_baseline(24,"08:00",140,status_cy,45);
+        if(clock_ready && thingsos_text_ink_box(ui_font(),time_str,140,&t_l,&t_r,NULL,NULL,NULL)) {
+            thingsos_label(ui_font(),&app.canvas,time_str,body_l-t_l,time_base,140);
+            /* The ink box ignores faint antialiasing fringes. Keep them
+               inside the same left boundary as the main time glyphs. */
+            thingsos_rect(&app.canvas,0,0,body_l,74,255);
+            time_right=body_l+(t_r-t_l);
+        }
+        int cx=app.canvas.width/2;
+        int left_gap=cx-(time_right+18), right_gap=(bat_left-18)-cx;
+        int max_w=2*(left_gap<right_gap?left_gap:right_gap);
+        if(app.opened && max_w>24) {
+            char title[192];
+            if(app.chapter.text && app.chapter.heading && app.chapter.heading_end<=app.chapter.bytes &&
+               app.chapter.heading_end>app.chapter.heading_start) {
+                size_t n=app.chapter.heading_end-app.chapter.heading_start;
+                if(n>=sizeof(title)) {
+                    n=sizeof(title)-1;
+                    while(n && ((unsigned char)app.chapter.text[app.chapter.heading_start+n]&0xc0)==0x80)--n;
+                }
+                memcpy(title,app.chapter.text+app.chapter.heading_start,n);title[n]=0;
+            } else if(app.epub_open && app.epub.chapter_names && app.chapter_index<app.epub.spine_count &&
+                      app.epub.chapter_names[app.chapter_index][0])
+                strlcpy(title,app.epub.chapter_names[app.chapter_index],sizeof(title));
+            else strlcpy(title,app.read_title,sizeof(title));
+            for(char* p=title;*p;++p)if(*p=='\n'||*p=='\r')*p=' ';
+            unsigned title_sz=status_fit_title(title,sizeof(title),max_w);
+            if(title_sz) {
+                int c_l,c_r;
+                int baseline=status_centered_baseline(title_sz,title,max_w,status_cy,45);
+                if(thingsos_text_ink_box(ui_font(),title,max_w,&c_l,&c_r,NULL,NULL,NULL))
+                    thingsos_label(ui_font(),&app.canvas,title,cx-(c_l+c_r+1)/2,baseline,max_w);
+            }
         }
     } else {
-        thingsos_label_right(ui_font(),&app.canvas,status,bat_left-112,bat_base,104);
-    }
-    status_wifi_draw(wifi_left,wifi_top,thingsos_network_connected());
-    status_battery_draw(bat_left,bat_top,app.battery,app.charge_connected);
-    time_t clock = wall_time();
-    struct tm date;
-    if (clock >= 1577836800 && localtime_r(&clock, &date) && date.tm_year <= 199) {
-        strftime(status, sizeof(status), "%m-%d %H:%M", &date);
-        if(app.page==THINGSOS_UI_READING && (app.menu || app.image_view.open)) {
-            strftime(status,sizeof(status),"%m-%d",&date);label(status,116,28,18,100);
-            strftime(status,sizeof(status),"%H:%M",&date);label(status,116,54,18,100);
-        } else if(app.page==THINGSOS_UI_READING) {
-            int tbase=status_centered_baseline(20,"08:00",190,status_cy,44);
-            label(status,28,tbase,20,190);
+        int shift=app.canvas.width-684,bat_left=654-BAT_W+shift;
+        const int wifi_top=26;
+        char status[16];
+        snprintf(status,sizeof(status),"%u%%",app.battery);
+        int bat_base=status_centered_baseline(24,status,136,status_cy,45);
+        int ink_l=0,ink_r=0,num_ink_left=bat_left-112;
+        if(thingsos_text_ink_box(ui_font(),status,136,&ink_l,&ink_r,NULL,NULL,NULL)) {
+            int text_x=bat_left-9-ink_r;
+            num_ink_left=text_x+ink_l;
+            thingsos_label(ui_font(),&app.canvas,status,text_x,bat_base,136);
         } else {
-            int tbase=status_centered_baseline(23,"08:00",224,status_cy,45);
-            centered_label(status,230,tbase,23,224);
+            thingsos_label_right(ui_font(),&app.canvas,status,bat_left-112,bat_base,104);
+        }
+        if(thingsos_network_wifi_enabled()) {
+            int wifi_left=num_ink_left-46;
+            status_wifi_draw(wifi_left,wifi_top,thingsos_network_connected());
+        }
+        status_battery_draw(bat_left,bat_top,app.battery,app.charge_connected);
+        if(clock_ready) {
+            int baseline=status_centered_baseline(26,"08:00",120,status_cy,46);
+            label(time_str,30,baseline,26,120);
         }
     }
-    if(app.page==THINGSOS_UI_READING && app.opened && app.epub_open) {
-        char title[192];
-        if(app.chapter.heading && app.chapter.heading_end<=app.chapter.bytes &&
-           app.chapter.heading_end>app.chapter.heading_start) {
-            size_t n=app.chapter.heading_end-app.chapter.heading_start;
-            if(n>=sizeof(title))n=sizeof(title)-1;
-            while(n && ((unsigned char)app.chapter.text[app.chapter.heading_start+n]&0xc0)==0x80)--n;
-            memcpy(title,app.chapter.text+app.chapter.heading_start,n);title[n]=0;
-            for(size_t i=0;i<n;++i)if(title[i]=='\n'||title[i]=='\r')title[i]=' ';
-        } else if(app.epub.chapter_names && app.chapter_index<app.epub.spine_count)
-            strlcpy(title,app.epub.chapter_names[app.chapter_index],sizeof(title));
-        else strlcpy(title,app.read_title,sizeof(title));
-        int title_width=wifi_left-230;if(title_width>248+shift)title_width=248+shift;
-        int cbase=status_centered_baseline(24,title,title_width,status_cy,46);
-        centered_label(title,218,cbase,24,title_width);
-    }
+    app.font.ui_size_percent=prior_scale;
     app.font.monochrome=prior_monochrome;
 }
 #include "reader_cache.inc"
@@ -2271,6 +2457,10 @@ static void draw(void) {
     if (alignment_draw()) goto draw_message;
     if (feature_draw()) goto draw_message;
     switch (app.page) {
+        case THINGSOS_UI_HOME:
+            home_draw();
+            nav();
+            break;
         case THINGSOS_UI_APPS:
             pico_apps_draw();
             break;
@@ -2404,13 +2594,6 @@ static void draw(void) {
                     ui_font(), &app.canvas,
                     (thingsos_reader_style_t){ app.px, app.line_choice, app.margin_choice,
                         app.weight_choice,app.indent_chars,app.ripple_enabled,app.wd_id[0]!=0 });
-                if(!app.image_view.open) {
-                    thingsos_rect(&app.canvas,16,8,96,64,255);
-                    for(int d=0;d<=16;d++) {
-                        thingsos_rect(&app.canvas,40+d,36-d,5,5,0);
-                        thingsos_rect(&app.canvas,40+d,36+d,5,5,0);
-                    }
-                }
                 if(app.jump)reader_jump_draw();
             }
             if (app.image_view.open && app.image_pixels) {
@@ -2626,7 +2809,7 @@ draw_message:
 }
 static void network_hotspot_policy(void);
 static bool home_tab(thingsos_ui_page_t page) {
-    return page==THINGSOS_UI_LIBRARY || page==THINGSOS_UI_WEIDU ||
+    return page==THINGSOS_UI_HOME || page==THINGSOS_UI_WEIDU ||
         page==THINGSOS_UI_APPS || page==THINGSOS_UI_SETTINGS;
 }
 static bool reader_surface(thingsos_ui_page_t page) {
@@ -2641,7 +2824,7 @@ static bool reader_ui_active(void) {
         app.wd_sync_panel || app.confirm_action);
 }
 static bool home_navigation_page(thingsos_ui_page_t page) {
-    return home_tab(page) || page==THINGSOS_UI_DISPLAY || page==THINGSOS_UI_TIME ||
+    return home_tab(page) || page==THINGSOS_UI_LIBRARY || page==THINGSOS_UI_DISPLAY || page==THINGSOS_UI_TIME ||
         page==THINGSOS_UI_POWER || page==THINGSOS_UI_WIFI || page==THINGSOS_UI_PASSWORD ||
         page==THINGSOS_UI_UPGRADE || page==THINGSOS_UI_RECOVERY || page==THINGSOS_UI_USB ||
         page==THINGSOS_UI_FILES || page==THINGSOS_UI_FONTS || page==THINGSOS_UI_WALLPAPER ||
@@ -2659,6 +2842,8 @@ static bool reader_input_can_idle(const thingsos_keys_t* keys,bool contact,bool 
     return !contact && !pressed && !keys->key && !sampled_contact;
 }
 static void navigate(thingsos_ui_page_t page) {
+    if (page==THINGSOS_UI_LOCK && app.page!=THINGSOS_UI_LOCK && app.page!=THINGSOS_UI_LOCK_PIN)
+        app.lock_return=app.page;
     if(page==THINGSOS_UI_LOCK && app.pin.enabled)pin_lock();
     if(app.pin.required && page!=THINGSOS_UI_LOCK)page=THINGSOS_UI_LOCK_PIN;
 #ifndef THINGSOS_HOST_UI
@@ -2692,11 +2877,11 @@ static void navigate(thingsos_ui_page_t page) {
     if(page!=THINGSOS_UI_READING && !(page==THINGSOS_UI_PASSWORD && app.editing==6))app.annotation_open=false;
     if(page==THINGSOS_UI_CHAPTERS)app.toc_draw_count=0;
     if(page==THINGSOS_UI_READING && app.opened)app.menu_root=app.reader_menu_root;
-    if(page==THINGSOS_UI_LIBRARY || page==THINGSOS_UI_SETTINGS || page==THINGSOS_UI_APPS)
-        app.menu_root=page;
+    if(reader_library_page(page)) app.menu_root=THINGSOS_UI_HOME;
+    if(page==THINGSOS_UI_SETTINGS || page==THINGSOS_UI_APPS) app.menu_root=page;
     else if(page==THINGSOS_UI_WEIDU)
-        app.menu_root=app.weidu_detail && app.weidu_detail_return!=THINGSOS_UI_WEIDU
-            ?THINGSOS_UI_LIBRARY:THINGSOS_UI_WEIDU;
+        app.menu_root=app.weidu_detail && reader_library_page(app.weidu_detail_return)
+            ?THINGSOS_UI_HOME:THINGSOS_UI_WEIDU;
     app.reader_background_refresh=false;
     thingsos_tilt_reset(&app.tilt);
     thingsos_board_tilt_active(false);
@@ -2730,7 +2915,10 @@ static void navigate(thingsos_ui_page_t page) {
     app.input_refresh = false;
     if (page == THINGSOS_UI_WIFI && app.page != THINGSOS_UI_PASSWORD && app.page != THINGSOS_UI_WIFI) wifi_scan(false);
     if (page != THINGSOS_UI_READING) preferences_save();
-    if (page == THINGSOS_UI_STATS) app.stats_from_reader = app.page == THINGSOS_UI_READING;
+    if (page == THINGSOS_UI_STATS && app.page != THINGSOS_UI_STATS) {
+        app.stats_return = app.page;
+        app.stats_from_reader = app.page == THINGSOS_UI_READING;
+    }
     if (app.page == THINGSOS_UI_READING && page != THINGSOS_UI_READING) save_state();
     if (page != THINGSOS_UI_WIFI && page != THINGSOS_UI_PASSWORD) {
         memset(app.wifi_password, 0, sizeof(app.wifi_password));
@@ -2739,6 +2927,7 @@ static void navigate(thingsos_ui_page_t page) {
     app.menu = false;
     app.jump = false;
     app.page = page;
+    if (page == THINGSOS_UI_HOME) feature_recent();
     /* A remote search may finish while its editor is open. Its query-owned
        result invalidates the shelf without repainting the keyboard. Consume
        it on return, including Cancel, before drawing the result page. */
@@ -2751,7 +2940,7 @@ static void navigate(thingsos_ui_page_t page) {
     thingsos_runtime_navigate(
         &app.runtime,
         page == THINGSOS_UI_READING    ? THINGSOS_READING
-        : page == THINGSOS_UI_LIBRARY  ? THINGSOS_LIBRARY
+        : page == THINGSOS_UI_HOME || page == THINGSOS_UI_LIBRARY ? THINGSOS_LIBRARY
         : page == THINGSOS_UI_TRANSFER ? THINGSOS_TRANSFER
                                        : THINGSOS_SETTINGS,
         now());
@@ -2778,12 +2967,15 @@ static bool lock_due(uint64_t time) {
 #include "pico_apps_ui.inc"
 #include "management.inc"
 // clang-format on
+static thingsos_ui_page_t unlock_target(void) {
+    thingsos_ui_page_t target = app.lock_return;
+    if ((unsigned)target >= THINGSOS_UI_COUNT || target == THINGSOS_UI_LOCK || target == THINGSOS_UI_LOCK_PIN ||
+        (target == THINGSOS_UI_READING && !app.opened)) return THINGSOS_UI_HOME;
+    return target;
+}
 static void unlock_screen(void) {
     if(app.pin.enabled || app.pin.required || app.pin.fault){pin_wake();return;}
-    thingsos_ui_page_t target = app.lock_return;
-    if (target == THINGSOS_UI_LOCK || (target == THINGSOS_UI_READING && !app.opened))
-        target = THINGSOS_UI_LIBRARY;
-    navigate(target);
+    navigate(unlock_target());
     app.activity_at = now();
     app.force_refresh = true;
     thingsos_board_unlock_refresh();
@@ -2902,6 +3094,22 @@ static void reading_power_poll(void) {
         power_action(action);
     }
 }
+static size_t previous_page_advance(void* context, size_t start) {
+    return page_end(context, start);
+}
+static void previous_page_yield(void* context) {
+    (void)context;
+    vTaskDelay(pdMS_TO_TICKS(1));
+}
+static bool chapter_previous_page(size_t target, size_t* previous) {
+    unsigned indexed_chapters = app.pagination_valid ? app.chapter_index + 1 : app.pagination_chapter;
+    return thingsos_chapter_prev_page(app.pages, app.page_count, indexed_chapters,
+        app.pagination_offset, app.chapter_index, target, previous_page_advance, previous_page_yield,
+        &app.chapter, previous, app.history, sizeof(app.history)/sizeof(app.history[0]), &app.history_count);
+}
+static void chapter_seek_last_page(void) {
+    if (pagination_prepare()) chapter_previous_page(app.chapter.bytes, &app.start);
+}
 static void next_page(bool forward) {
     if(online_modal_visible())return;
     app.reader_background_refresh=false;
@@ -2912,40 +3120,36 @@ static void next_page(bool forward) {
     unsigned before_chapter=app.chapter_index;
     size_t before_start=app.start;
     bool before_image=app.image_hit_count!=0;
-    if (!app.pagination_valid) {
-        if (forward && app.end > app.start && app.end < app.chapter.bytes) {
-            if (app.history_count < 4096) app.history[app.history_count++] = app.start;
+    if (app.pagination_valid) {
+        size_t page = forward ? current_page() + 1 : previous_indexed_page();
+        if (page >= app.page_count) { say(forward ? "已到最后一页" : "已到第一页"); return; }
+        if (!go_page(page)) return;
+    } else if (forward) {
+        if (app.end > app.start && app.end < app.chapter.bytes) {
+            if (app.history_count < sizeof(app.history)/sizeof(app.history[0]))
+                app.history[app.history_count++] = app.start;
             app.start = app.end;
-        } else if (!forward && app.history_count) {
-            app.start = app.history[--app.history_count];
-        } else if (app.epub_open && forward && app.chapter_index + 1 < app.epub.spine_count) {
+        } else if (app.epub_open && app.chapter_index + 1 < app.epub.spine_count) {
             if (!load_chapter(app.chapter_index + 1)) { if(!app.epub.weidu_online)say("章节无法打开"); return; }
-        } else if (app.epub_open && !forward && app.chapter_index) {
-            if (!load_chapter(app.chapter_index - 1)) { if(!app.epub.weidu_online)say("章节无法打开"); return; }
-            if(app.pages && app.pagination_chapter>app.chapter_index) {
-                size_t last=thingsos_page_find(app.pages,app.page_count,app.chapter_index,UINT32_MAX);
-                app.start=app.pages[last].offset;
-                goto page_changed;
+        } else { say("已到最后一页"); return; }
+    } else {
+        while (app.history_count && app.history[app.history_count - 1] >= app.start) --app.history_count;
+        if (app.history_count) {
+            app.start = app.history[--app.history_count];
+        } else if (app.start) {
+            size_t previous;
+            if (!chapter_previous_page(app.start, &previous)) { say("无法定位上一页"); return; }
+            app.start = previous;
+        } else if (app.epub_open && app.chapter_index) {
+            unsigned previous = app.chapter_index - 1;
+            if (!load_chapter(previous)) {
+                if (app.epub.weidu_online) online_previous_page(previous);
+                else say("章节无法打开");
+                return;
             }
-            size_t offset = 0;
-            while (offset < app.chapter.bytes) {
-                size_t end = page_end(&app.chapter, offset);
-                if (end <= offset || end >= app.chapter.bytes) break;
-                offset = end;
-                vTaskDelay(pdMS_TO_TICKS(1));
-            }
-            app.start = offset;
-        } else { say(forward ? "已到最后一页" : "已到第一页"); return; }
-        goto page_changed;
+            chapter_seek_last_page();
+        } else { say("已到第一页"); return; }
     }
-    size_t page = current_page();
-    if (forward && page + 1 < app.page_count)
-        go_page(page + 1);
-    else if (!forward && page)
-        go_page(page - 1);
-    else
-        say(forward ? "已到最后一页" : "已到第一页");
-page_changed:
     app.ripple_pending=app.ripple_enabled && !before_image &&
         (before_chapter!=app.chapter_index || before_start!=app.start);
     app.ripple_forward=forward;
@@ -3040,6 +3244,21 @@ static void reader_tilt_poll(bool touching) {
 static void reader_tilt_input_poll(bool pressed,bool key_held) {
     reader_tilt_poll(pressed || key_held || thingsos_board_touch_contact_pending());
 }
+static void reader_return_to_files(void) {
+    release_book();
+    app.reader_from_files = false;
+    navigate(THINGSOS_UI_FILES);
+    app.list_start = app.file_return_start;
+}
+
+static void stats_back(void) {
+    thingsos_ui_page_t target = app.stats_return;
+    if ((unsigned)target >= THINGSOS_UI_COUNT || target==THINGSOS_UI_STATS ||
+        target==THINGSOS_UI_LOCK || target==THINGSOS_UI_LOCK_PIN ||
+        (target==THINGSOS_UI_READING && !app.opened)) target=THINGSOS_UI_HOME;
+    navigate(target);
+}
+
 static void return_to_menu(void) {
     if(pico_controls_return(app.page))return;
     if((app.page==THINGSOS_UI_WIFI && app.wifi_return!=THINGSOS_UI_SETTINGS) ||
@@ -3049,13 +3268,12 @@ static void return_to_menu(void) {
         return;
     }
     if(app.page==THINGSOS_UI_READING && app.reader_from_files) {
-        release_book();app.reader_from_files=false;
-        size_t first=app.file_return_start;navigate(THINGSOS_UI_FILES);app.list_start=first;return;
+        reader_return_to_files();return;
     }
     thingsos_ui_page_t target=app.menu_root;
     if(app.page==THINGSOS_UI_READING || app.page==THINGSOS_UI_CHAPTERS || app.page==THINGSOS_UI_BOOKMARKS)
         target=app.reader_menu_root;
-    if(!home_tab(target))target=THINGSOS_UI_LIBRARY;
+    if(!home_tab(target))target=THINGSOS_UI_HOME;
     wd_thought_close();
     app.wd_notes_open=app.wd_long_open=app.wd_sync_panel=app.wd_consent=app.wd_cloud_prompt=false;
     app.time_edit=false;
@@ -3151,12 +3369,14 @@ static void capacitive_key_dispatch(thingsos_key_action_t action) {
                 else if(app.wd_notes_open || app.wd_sync_panel || app.wd_long_open)tap(60,150);
                 else if(app.weidu_detail || app.mp_mode)tap(100,275);
                 else if(app.weidu_query[0])weidu_search_exit();
+                else if(weidu_back_visible())navigate(THINGSOS_UI_HOME);
                 return;
             }
             if(home_tab(app.page))return;
+            if(app.page==THINGSOS_UI_LIBRARY){navigate(THINGSOS_UI_HOME);return;}
             if(app.page==THINGSOS_UI_MANAGE && app.delete_confirm){tap(100,1100);return;}
             if(app.page==THINGSOS_UI_RECENT){navigate(THINGSOS_UI_LIBRARY);return;}
-            if(app.page==THINGSOS_UI_STATS && app.stats_from_reader){navigate(THINGSOS_UI_READING);return;}
+            if(app.page==THINGSOS_UI_STATS){stats_back();return;}
             tap(60,150);return;
         }
     }
@@ -3190,6 +3410,40 @@ static void capacitive_key(thingsos_key_action_t action) {
         (unsigned)action,(unsigned)app.page,before,app.menu,app.dirty,app.asleep);
     if(!app.dirty)app.ui_action_at=0;
 }
+static void home_open_library(bool weidu) {
+    app.library_weidu = weidu;
+    app.list_start = 0;
+    app.library_order_valid = false;
+    library_load();
+    navigate(THINGSOS_UI_LIBRARY);
+}
+
+static void weidu_tab_open(void) {
+    if (app.weidu_query[0]) {
+        app.weidu_query[0] = 0;
+        app.weidu_start = 0;
+        app.weidu_shelf_valid = false;
+    }
+    weidu_enter();
+}
+
+static void home_activate(thingsos_home_action_t action) {
+    if (action == THINGSOS_HOME_LOCAL) { home_open_library(false); return; }
+    if (action == THINGSOS_HOME_WEIDU) { home_open_library(true); return; }
+    if (action == THINGSOS_HOME_STATS) { navigate(THINGSOS_UI_STATS); return; }
+    if (action == THINGSOS_HOME_NONE) return;
+    size_t indices[THINGSOS_HOME_BOOK_LIMIT];
+    size_t count = home_recent_indices(indices, media());
+    if (action == THINGSOS_HOME_CONTINUE && !count) { home_open_library(false); return; }
+    size_t selected = thingsos_home_book_index(action);
+    if (selected < count && !open_book(indices[selected])) say("书籍损坏、超限或 SD 不可用");
+}
+
+static void home_tab_open(void) {
+    library_load();
+    navigate(THINGSOS_UI_HOME);
+}
+
 static void tap_dispatch(int x, int y) {
     if(app.asleep)return;
     if(app.jump_pending) {
@@ -3208,6 +3462,8 @@ static void tap_dispatch(int x, int y) {
     if(usb_tap(x,y))return;
     bool message_was_visible = app.message[0] != 0;
     app.message[0] = 0;
+    if (!message_was_visible && app.page == THINGSOS_UI_HOME && app.library_valid && !app.controls_open &&
+        !app.confirm_action && !app.time_edit && thingsos_ui_nav_hit(x,y) == 0) return;
     if (message_was_visible) app.dirty = true;
     thingsos_runtime_activity(&app.runtime, now());
     app.activity_at = now();
@@ -3223,15 +3479,19 @@ static void tap_dispatch(int x, int y) {
         say("微读正在处理，请返回微读取消操作");return;
     }
     if(app.page==THINGSOS_UI_READER_MORE) {
+        if(x>=app.canvas.width-352 && x<app.canvas.width-196 && y>=100 && y<168) {
+            font_scan();
+            navigate(THINGSOS_UI_FONTS);
+            font_preview_current();
+            return;
+        }
         if(x>=app.canvas.width-182 && x<app.canvas.width-36 && y>=100 && y<168) {
             app.vertical_enabled=!app.vertical_enabled;
             if(!preferences_save()) {
                 app.vertical_enabled=!app.vertical_enabled;
                 say("设置保存失败，请重试");
             } else {
-                reader_cache_clear();
-                app.pagination_started=app.pagination_valid=app.pagination_failed=false;
-                app.page_cache_key=app.history_count=0;
+                reader_layout_changed();
                 memset(&app.text_hits,0,sizeof(app.text_hits));
             }
             app.dirty=true;return;
@@ -3262,8 +3522,7 @@ static void tap_dispatch(int x, int y) {
             bool old=app.landscape_enabled;app.landscape_enabled=reader_more_choice(x,1);
             if(!preferences_save()){app.landscape_enabled=old;say("设置保存失败，请重试");}
             else if(old!=app.landscape_enabled){
-                reader_cache_clear();app.pagination_started=app.pagination_valid=app.pagination_failed=false;
-                app.history_count=0;app.page_cache_key=0;
+                reader_layout_changed();
                 thingsos_tilt_reset(&app.tilt);
             }
             reader_canvas_geometry();app.dirty=true;
@@ -3272,8 +3531,7 @@ static void tap_dispatch(int x, int y) {
             bool old=app.immersive_enabled;app.immersive_enabled=reader_more_choice(x,3);
             if(!preferences_save()){app.immersive_enabled=old;say("设置保存失败，请重试");}
             else if(old!=app.immersive_enabled) {
-                reader_cache_clear();app.pagination_started=app.pagination_valid=app.pagination_failed=false;
-                app.history_count=0;app.page_cache_key=0;
+                reader_layout_changed();
                 thingsos_tilt_reset(&app.tilt);
             }
             app.dirty=true;
@@ -3298,8 +3556,7 @@ static void tap_dispatch(int x, int y) {
         !(app.page==THINGSOS_UI_FONTS && app.font_from_reader)) {
         int item = thingsos_ui_nav_hit(x, y);
         if (item >= 0) {
-            if ((item == 0 && app.page == THINGSOS_UI_LIBRARY && app.library_valid) ||
-                (item == 1 && app.page == THINGSOS_UI_WEIDU && !app.weidu_query[0] && !app.mp_mode && !app.weidu_detail &&
+            if ((item == 1 && app.page == THINGSOS_UI_WEIDU && !app.weidu_query[0] && !app.mp_mode && !app.weidu_detail &&
                  !app.weidu_logout_confirm && !app.wd_notes_open && !app.wd_thought_open && !app.wd_sync_panel && !app.wd_long_open && !app.wd_consent) ||
                 (item == 2 && app.page == THINGSOS_UI_APPS) ||
                 (item == 3 && app.page == THINGSOS_UI_SETTINGS)) {
@@ -3310,21 +3567,22 @@ static void tap_dispatch(int x, int y) {
             thingsos_font_close(&app.preview_font);
             if (item == 0) {
                 ESP_LOGI("ThingsOS_nav","Tab stage=library-load");
-                library_load();
-                navigate(THINGSOS_UI_LIBRARY);
+                home_tab_open();
             }
-            if (item == 1) {
-                if(app.weidu_query[0]){app.weidu_query[0]=0;app.weidu_start=0;app.weidu_shelf_valid=false;}
-                weidu_enter();
-            }
+            if (item == 1) weidu_tab_open();
             if (item == 2) navigate(THINGSOS_UI_APPS);
             if (item == 3) navigate(THINGSOS_UI_SETTINGS);
             return;
         }
     }
+    if (!app.confirm_action && !app.time_edit && x>=0 && x<90 && y>=74 && y<200 &&
+        (app.page==THINGSOS_UI_LIBRARY || (app.page==THINGSOS_UI_WEIDU && weidu_back_visible()))) {
+        navigate(THINGSOS_UI_HOME);
+        return;
+    }
     if (!app.confirm_action && !app.time_edit && y >= 74 && y < 200 && x < 90 &&
         (app.page!=THINGSOS_UI_STATS || y<STATS_TABS_Y) &&
-        app.page != THINGSOS_UI_LIBRARY && app.page != THINGSOS_UI_RECENT &&
+        !reader_library_page(app.page) &&
         app.page != THINGSOS_UI_WEIDU &&
         app.page != THINGSOS_UI_SETTINGS && app.page != THINGSOS_UI_APPS &&
         app.page != THINGSOS_UI_READING && app.page != THINGSOS_UI_LOCK &&
@@ -3332,7 +3590,7 @@ static void tap_dispatch(int x, int y) {
         app.page != THINGSOS_UI_CUBOX && app.page != THINGSOS_UI_FLOMO) {
         if (app.page == THINGSOS_UI_CHAPTERS || app.page == THINGSOS_UI_BOOKMARKS)
             navigate(THINGSOS_UI_READING);
-        else if (app.page == THINGSOS_UI_STATS) navigate(THINGSOS_UI_LIBRARY);
+        else if (app.page == THINGSOS_UI_STATS) stats_back();
         else if (app.page == THINGSOS_UI_TRANSFER) navigate(app.transfer_return);
         else if (app.page == THINGSOS_UI_WIFI) {
             if(!pico_controls_return(THINGSOS_UI_WIFI))navigate(app.wifi_return);
@@ -3359,11 +3617,11 @@ static void tap_dispatch(int x, int y) {
     if (alignment_tap(x, y)) return;
     if (management_tap(x, y)) return;
     if (feature_tap(x, y)) return;
+    if (app.page == THINGSOS_UI_HOME && y < 1098) {
+        home_activate(thingsos_home_hit(x,y));
+        return;
+    }
     if (app.page == THINGSOS_UI_READING) {
-        if (app.menu && y >= 8 && y < 72 && x >= 16 && x < 112 && !app.image_view.open) {
-            if(app.reader_from_weidu) weidu_enter();else navigate(THINGSOS_UI_LIBRARY);
-            return;
-        }
         if (app.image_view.open) {
             if (y < 180) {
                 thingsos_image_close(&app.image_view, &app.runtime.location);
@@ -3401,20 +3659,16 @@ static void tap_dispatch(int x, int y) {
                 switch (action) {
                     case THINGSOS_MENU_CLOSE: app.menu = false; break;
                     case THINGSOS_MENU_SMALLER:
-                        app.px = thingsos_reader_size_step(app.px, false);
-                        app.history_count = 0;
+                    case THINGSOS_MENU_LARGER: {
+                        unsigned px = thingsos_reader_size_step(app.px, action == THINGSOS_MENU_LARGER);
+                        if (app.px != px) { app.px = px; reader_layout_changed(); }
                         break;
-                    case THINGSOS_MENU_LARGER:
-                        app.px = thingsos_reader_size_step(app.px, true);
-                        app.history_count = 0;
-                        break;
+                    }
                     case THINGSOS_MENU_LINE:
-                        app.line_choice = choice;
-                        app.history_count = 0;
+                        if (app.line_choice != choice) { app.line_choice = choice; reader_layout_changed(); }
                         break;
                     case THINGSOS_MENU_MARGIN:
-                        app.margin_choice = choice;
-                        app.history_count = 0;
+                        if (app.margin_choice != choice) { app.margin_choice = choice; reader_layout_changed(); }
                         break;
                     case THINGSOS_MENU_WEIGHT:
                         if(app.weight_choice!=choice) {
@@ -3423,18 +3677,18 @@ static void tap_dispatch(int x, int y) {
                                 app.weight_choice,app.pagination_valid,(unsigned)app.page_count);
                         }
                         break;
-                    case THINGSOS_MENU_INDENT:
-                        /* An indent change moves every following line start, so
-                           the pre-rendered pages and pagination both restart. */
-                        app.indent_chars = choice == 1 ? THINGSOS_READER_INDENT_CHARS
-                                                       : THINGSOS_READER_INDENT_OFF;
-                        app.history_count = 0;
-                        reader_cache_clear();
+                    case THINGSOS_MENU_INDENT: {
+                        unsigned indent = choice == 1 ? THINGSOS_READER_INDENT_CHARS : THINGSOS_READER_INDENT_OFF;
+                        if (app.indent_chars != indent) { app.indent_chars = indent; reader_layout_changed(); }
                         break;
+                    }
                     case THINGSOS_MENU_RIPPLE:
                         app.ripple_enabled=choice==1;
                         break;
                     case THINGSOS_MENU_CHAPTERS: navigate(THINGSOS_UI_CHAPTERS); break;
+                    case THINGSOS_MENU_ADD_BOOKMARK:
+                        feature_add_mark();
+                        break;
                     case THINGSOS_MENU_BOOKMARKS: navigate(THINGSOS_UI_BOOKMARKS); break;
                     case THINGSOS_MENU_NOTES:
                         reader_annotations_enter();break;
@@ -3568,10 +3822,8 @@ static void tap_dispatch(int x, int y) {
                 memset(&app.preview_font, 0, sizeof(app.preview_font));
                 strlcpy(font_setting_path(), app.preview_path, sizeof(app.font_path));
                 if(app.font_from_reader) {
-                    app.history_count=0;
-                    app.pagination_valid=app.pagination_started=app.pagination_failed=false;
+                    reader_layout_changed();
                     app.progress_total=0;
-                    reader_cache_clear();
                 }
                 preferences_save();
             } else
@@ -3594,11 +3846,8 @@ static void tap_dispatch(int x, int y) {
     }
     int nav = thingsos_ui_nav_hit(x, y);
     if (nav >= 0) {
-        if(nav==1) {weidu_enter();return;}
-        if (nav == 0) {
-            library_load();
-            navigate(THINGSOS_UI_LIBRARY);
-        }
+        if(nav==1) {weidu_tab_open();return;}
+        if (nav == 0) home_tab_open();
         if (nav == 2) navigate(THINGSOS_UI_APPS);
         if (nav == 3) navigate(THINGSOS_UI_SETTINGS);
         return;
@@ -3661,7 +3910,7 @@ static bool stats_tab_press(int x,int y) {
     tap(x,y);return true;
 }
 static bool home_tab_press(int x,int y) {
-    if(app.asleep || !home_tab(app.page) || app.confirm_action || app.time_edit ||
+    if(app.asleep || (!home_tab(app.page) && app.page!=THINGSOS_UI_LIBRARY) || app.confirm_action || app.time_edit ||
        app.image_view.open || app.annotation_open || app.annotation_selecting ||
        app.wd_notes_open || app.wd_thought_open || app.wd_cloud_prompt || app.wd_consent ||
        thingsos_ui_nav_hit(x,y)<0)return false;
@@ -3771,7 +4020,10 @@ void app_main(void) {
     thingsos_records_init(&app.records);
     setenv("TZ", "CST-8", 1);
     tzset();
-    app.page = usb_return_marker==USB_RETURN_SETTINGS?THINGSOS_UI_SETTINGS:THINGSOS_UI_LIBRARY;
+    app.page = usb_return_marker==USB_RETURN_SETTINGS?THINGSOS_UI_SETTINGS:THINGSOS_UI_HOME;
+    app.menu_root=app.page;
+    app.reader_menu_root=app.reader_return=app.stats_return=app.lock_return=THINGSOS_UI_HOME;
+    if(app.page==THINGSOS_UI_SETTINGS)thingsos_runtime_navigate(&app.runtime,THINGSOS_SETTINGS,now());
     usb_return_marker=0;
     thingsos_io_lock = xSemaphoreCreateMutex();
     if (!thingsos_io_lock) return;
@@ -3870,7 +4122,7 @@ void app_main(void) {
                 xSemaphoreTake(thingsos_io_lock, pdMS_TO_TICKS(10)) == pdTRUE) {
                 if (app.opened) {
                     release_book();
-                    if (app.page == THINGSOS_UI_READING) navigate(THINGSOS_UI_LIBRARY);
+                    if (app.page == THINGSOS_UI_READING) navigate(THINGSOS_UI_HOME);
                 } else
                     feature_save();
                 thingsos_network_pause_complete(!app.records_bound || !app.records_dirty);
@@ -3955,7 +4207,7 @@ void app_main(void) {
             thingsos_board_font(&app.font);
             thingsos_board_font(&app.ui_font);
             if (!builtin && app.page != THINGSOS_UI_FILES)
-                app.page=app.pin.required?THINGSOS_UI_LOCK_PIN:THINGSOS_UI_LIBRARY;
+                navigate(app.pin.required?THINGSOS_UI_LOCK_PIN:THINGSOS_UI_HOME);
             memset(&app.browser, 0, sizeof(app.browser));
             scan();
             say("SD 卡已移除");
@@ -4308,7 +4560,7 @@ void app_main(void) {
             if(clock_due)app.clock_refreshed=now();
             if(app.controls_open)app.dirty=true;
             if (!app.dirty && !app.force_refresh && !app.transition_refresh && !app.ui_action_at &&
-                (power_changed || app.page==THINGSOS_UI_LIBRARY || app.page==THINGSOS_UI_APPS ||
+                (power_changed || app.page==THINGSOS_UI_HOME || app.page==THINGSOS_UI_LIBRARY || app.page==THINGSOS_UI_APPS ||
                  app.page==THINGSOS_UI_TRANSFER || app.page==THINGSOS_UI_SETTINGS)) {
                 app.font.ui_size_percent=(app.ui_px ? app.ui_px : 30)*100/30;
                 app.font.ui_weight_override=app.ui_weight+1;

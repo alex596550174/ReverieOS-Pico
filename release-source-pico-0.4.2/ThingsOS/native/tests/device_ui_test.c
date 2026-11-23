@@ -44,9 +44,9 @@ static void charging_status_test(void) {
         app.charge_connected=true;draw_status();unsigned changed=0,black=0;
         for(unsigned y=0;y<74;++y)for(unsigned x=0;x<684;++x) {
             if(app.canvas.pixels[y*684+x]!=unplugged[y*684+x]) {
-                CHECK(x>=630 && x<=643 && y>=29 && y<=45);++changed;
+                CHECK(x>=618 && x<=631 && y>=29 && y<=45);++changed;
             }
-            if(x>=630 && x<=643 && y>=29 && y<=45 && app.canvas.pixels[y*684+x]<128)++black;
+            if(x>=618 && x<=631 && y>=29 && y<=45 && app.canvas.pixels[y*684+x]<128)++black;
         }
         CHECK(changed>45 && black>45);
         app.charge_connected=false;draw_status();CHECK(!memcmp(unplugged,app.canvas.pixels,684u*74u));
@@ -58,11 +58,11 @@ static void charging_status_test(void) {
     app.charge_connected=true;draw_status();
     unsigned char portrait_battery[54*23];
     for(unsigned y=0;y<23;++y)
-        memcpy(portrait_battery+y*54,app.canvas.pixels+(26+y)*684+612,54);
+        memcpy(portrait_battery+y*54,app.canvas.pixels+(26+y)*684+600,54);
     app.landscape_enabled=true;reader_canvas_geometry();app.charge_connected=true;
     snapshot("status-charging-landscape");
     for(unsigned y=0;y<23;++y)
-        CHECK(!memcmp(portrait_battery+y*54,app.canvas.pixels+(26+y)*app.canvas.width+app.canvas.width-72,54));
+        CHECK(!memcmp(portrait_battery+y*54,app.canvas.pixels+(26+y)*app.canvas.width+app.canvas.width-84,54));
     app.landscape_enabled=false;reader_canvas_geometry();
     app.battery=saved_battery;app.charge_connected=saved_connected;
     app.power_sampled=0;app.power_status_pending=false;
@@ -160,6 +160,20 @@ static void online_reader_test(void) {
     online_arrive(5);online_poll();CHECK(app.chapter_index==5 && !online.waiting && host_weidu.busy);
     host_weidu.busy=false;host_weidu.phase=WD_READY;online_poll();
     CHECK(online.retry_at==UINT64_MAX); /* Last chapter has no future work. */
+    CHECK(app.start==0 && !thingsos_weidu_stream_ready(host_online_root,book.id,4));
+    next_page(false);
+    CHECK(app.chapter_index==5 && !app.start && online.waiting && online.previous_page && online.target==4);
+    online_poll();CHECK(online.running && host_weidu_chapter==4);
+    online_arrive(4);host_weidu.busy=false;host_weidu.phase=WD_READY;online_poll();
+    CHECK(app.chapter_index==4 && !online.waiting && !online.previous_page);
+    size_t previous_last=0;
+    for (size_t after=page_end(&app.chapter,0); after<app.chapter.bytes; after=page_end(&app.chapter,previous_last)) {
+        CHECK(after>previous_last);
+        previous_last=after;
+    }
+    CHECK(app.start==previous_last && app.runtime.location.chapter==4 && app.runtime.location.byte_offset==previous_last);
+    char arrived[800];snprintf(arrived,sizeof(arrived),"%s/book-1234567890/online-4-5-img.xhtml",host_online_root);
+    CHECK(!remove(arrived));
     CHECK(load_chapter(3));app.start=2;online_need(4);CHECK(online_modal_visible());
     draw();snapshot("online-loading-card-chapter");
     app.landscape_enabled=true;draw();snapshot("online-loading-card-landscape");
@@ -416,7 +430,7 @@ static void reader_surface_refresh_test(void) {
     app.editing=6;CHECK(reader_surface(THINGSOS_UI_PASSWORD));
     app.editing=0;CHECK(!reader_surface(THINGSOS_UI_PASSWORD));
     app.force_refresh=app.transition_refresh=false;app.menu=true;
-    tap(550,1070);CHECK(app.jump && !app.transition_refresh && !app.force_refresh);
+    tap(100,1150);CHECK(app.jump && !app.transition_refresh && !app.force_refresh);
     tap(100,1150);CHECK(!app.jump && !app.transition_refresh && !app.force_refresh);
     capacitive_key(THINGSOS_KEY_PREVIOUS);CHECK(!app.menu && !app.transition_refresh && !app.force_refresh);
     app.menu=true;app.jump=true;capacitive_key(THINGSOS_KEY_PREVIOUS);
@@ -465,20 +479,27 @@ static void reader_font_parent_test(void) {
     bool sd=host_sd;host_sd=false;app.landscape_enabled=false;reader_canvas_geometry();
     size_t position=app.start;unsigned chapter=app.chapter_index;
     void* active_font=app.font.face;
-    CHECK(reading_menu_press(100,1160) && app.page==THINGSOS_UI_FONTS && app.font_from_reader);
+    CHECK(reading_menu_press(100,1160) && app.page==THINGSOS_UI_BOOKMARKS);
+    navigate(THINGSOS_UI_READING);app.menu=true;
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134) && app.page==THINGSOS_UI_FONTS && app.font_from_reader);
     draw();
     for(int y=1100;y<1216;++y)for(int x=0;x<684;++x)CHECK(app.canvas.pixels[(size_t)y*684+x]==255);
     canvas_snapshot("reader-font-parent");
     for(unsigned tab=0;tab<4;++tab){tap((int)tab*171+85,1150);CHECK(app.page==THINGSOS_UI_FONTS);}
     CHECK(reader_font_press(60,150) && app.page==THINGSOS_UI_READING && app.menu && !app.jump);
     CHECK(app.start==position && app.chapter_index==chapter && app.font.face==active_font);
-    CHECK(reading_menu_press(100,1160) && app.font_from_reader);
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134) && app.font_from_reader);
     CHECK(reader_font_press(150,1040) && app.page==THINGSOS_UI_READING && app.menu);
-    CHECK(reading_menu_press(100,1160) && app.font_from_reader);
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134) && app.font_from_reader);
     capacitive_key(THINGSOS_KEY_MENU);CHECK(app.page==THINGSOS_UI_READING && app.menu);
-    CHECK(reading_menu_press(100,1160));
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134));
     capacitive_key(THINGSOS_KEY_PREVIOUS);CHECK(app.page==THINGSOS_UI_READING && app.menu);
-    CHECK(reading_menu_press(100,1160));
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134));
     font_preview_current();tap(500,1040);CHECK(app.page==THINGSOS_UI_READING && app.menu);
     navigate(THINGSOS_UI_SETTINGS);font_preview_current();navigate(THINGSOS_UI_FONTS);
     CHECK(!app.font_from_reader && !reader_surface(app.page));
@@ -528,8 +549,8 @@ static void statistics_heatmap_test(void) {
     CHECK(calendar.leading==5 && calendar.columns==14);
     static const uint64_t lower[]={0,1,5ULL*60000,10ULL*60000,15ULL*60000,30ULL*60000,45ULL*60000,60ULL*60000};
     for(unsigned i=0;i<8;++i) {
-        CHECK(stats_heat_level(lower[i])==i);
-        if(i)CHECK(stats_heat_level(lower[i]-1)==i-1);
+        CHECK(thingsos_stats_heat_level(lower[i])==i);
+        if(i)CHECK(thingsos_stats_heat_level(lower[i]-1)==i-1);
     }
     navigate(THINGSOS_UI_STATS);app.stats_period=1;snapshot("stats-heatmap-exact");
     static const unsigned char shades[]={238,204,170,136,102,68,34,0};
@@ -537,7 +558,7 @@ static void statistics_heatmap_test(void) {
         unsigned slot=calendar.leading+i;
         int x=STATS_HEAT_X+(slot/7)*STATS_HEAT_PITCH_X+12;
         int y=STATS_HEAT_Y+(slot%7)*STATS_HEAT_PITCH_Y+12;
-        CHECK(app.canvas.pixels[(size_t)y*684+x]==(calendar.dates[i]>calendar.today?255:shades[stats_heat_level(calendar.duration[i])]));
+        CHECK(app.canvas.pixels[(size_t)y*684+x]==(calendar.dates[i]>calendar.today?255:shades[thingsos_stats_heat_level(calendar.duration[i])]));
         if(calendar.dates[i]>calendar.today)CHECK(app.canvas.pixels[(size_t)(y-12)*684+x]==204);
     }
     CHECK(app.canvas.pixels[(STATS_HEAT_Y+12)*684+STATS_HEAT_X+12]==255); /* Before range. */
@@ -616,7 +637,7 @@ static void statistics_period_test(void) {
     app.opened=true;app.runtime.location.book_id=77;app.runtime.reading_ms=2000;app.accounted_ms=0;
     feature_account();CHECK(app.records.total_ms==2000 && app.records.hour_ms[8]==1000 && app.records.hour_ms[9]==1000);
     at.tm_mday=22;at.tm_hour=0;host_wall_time=mktime(&at);app.runtime.reading_ms+=2000;
-    feature_account();CHECK(app.records.hour_date==20261022 && app.records.hour_ms[0]==1000 && stats_day_duration(20261021)==3000);
+    feature_account();CHECK(app.records.hour_date==20261022 && app.records.hour_ms[0]==1000 && thingsos_records_day_duration(&app.records,20261021)==3000);
     app.opened=opened;app.runtime.location=loc;app.runtime.reading_ms=reading;app.accounted_ms=accounted;
     app.records=*saved;free(saved);host_wall_time=old_time;app.stats_period=0;
 }
@@ -1346,19 +1367,37 @@ int main(int argc, char** argv) {
     host_weidu_shelf_total=5;weidu_shelf_load();
     snprintf(host_weidu_epub,sizeof(host_weidu_epub),"%s/valid.epub",fixture_root);
     snapshot("weidu-shelf-cached");
-    CHECK(app.canvas.pixels[500u*684+36]==0);
+    thingsos_weidu_book_t badge_book={0};strcpy(badge_book.id,"badge-test");
+    book_t badge_model={0};strcpy(badge_model.name,"cover test");
+    weidu_cover(&badge_book,&badge_model,36,350,94,130);
+    const int badge_x=36+94-1-7-14,badge_y=350+130-1-7-14;
+    CHECK(app.canvas.pixels[(size_t)(badge_y-14)*684+badge_x]<225); /* Antialiased rim. */
+    CHECK(app.canvas.pixels[(size_t)(badge_y-8)*684+badge_x]==255);
+    CHECK(app.canvas.pixels[(size_t)badge_y*684+badge_x]==0); /* Arrow stem. */
+    for(int y=-14;y<=14;++y)for(int d=1;d<=14;++d){
+        size_t at=(size_t)(badge_y+y)*684+badge_x;
+        CHECK(app.canvas.pixels[at-d]==app.canvas.pixels[at+d]);
+    }
+    snprintf(badge_model.path,sizeof(badge_model.path),"%s/valid.epub",fixture_root);
+    badge_model.epub=true;badge_model.id=identity(badge_model.path);
+    cover_from(&badge_model,36,350,94,130,NULL);
+    unsigned char cached_corner[29*29];
+    for(int y=0;y<29;++y) memcpy(cached_corner+y*29,app.canvas.pixels+(size_t)(badge_y-14+y)*684+badge_x-14,29);
+    weidu_cover(&badge_book,&badge_model,36,350,94,130);
+    for(int y=0;y<29;++y) CHECK(!memcmp(cached_corner+y*29,app.canvas.pixels+(size_t)(badge_y-14+y)*684+badge_x-14,29));
     tap(610,260);snapshot("weidu-cards-cached");
-    CHECK(app.canvas.pixels[500u*684+60]==0);
     tap(610,260);
     CHECK(weidu_hold_delay(150,420)==1000);
     CHECK(!weidu_release_hold(150,420,999) && !app.weidu_detail);
     CHECK(weidu_release_hold(150,420,1000) && app.weidu_detail);snapshot("weidu-book");
     tap(300,275);CHECK(!app.weidu_detail && app.page==THINGSOS_UI_WEIDU);
     tap(150,420);CHECK(app.page==THINGSOS_UI_READING && app.reader_from_weidu && app.opened);
-    app.menu=true;tap(40,35);CHECK(app.page==THINGSOS_UI_WEIDU && !app.opened);
+    app.menu=true;tap(40,35);CHECK(app.page==THINGSOS_UI_READING && !app.menu);
+    weidu_enter();CHECK(app.page==THINGSOS_UI_WEIDU && !app.opened);
     CHECK(weidu_hold(150,420) && app.weidu_detail);
     tap(300,1010);CHECK(app.page==THINGSOS_UI_READING && app.reader_from_weidu && app.opened);
-    app.menu=true;tap(40,35);CHECK(app.page==THINGSOS_UI_WEIDU && !app.opened);
+    app.menu=true;tap(40,35);CHECK(app.page==THINGSOS_UI_READING && !app.menu);
+    weidu_enter();CHECK(app.page==THINGSOS_UI_WEIDU && !app.opened);
     tap(580,150);CHECK(app.weidu_logout_confirm && host_weidu_calls==1);
     tap(500,930);CHECK(host_weidu_action==WD_DEVICE_LOGOUT && host_weidu_calls==2);
     memset(&host_weidu,0,sizeof(host_weidu));host_weidu_epub[0]=0;host_network_connected=false;
@@ -1651,7 +1690,7 @@ int main(int argc, char** argv) {
     }
     tap(340, 1192);CHECK(!app.menu && !app.jump && !app.dirty);
     tap(340, 500);CHECK(app.menu);
-    tap(500, 1070);CHECK(app.jump); /* Explicit menu jump remains available. */
+    tap(100, 1150);CHECK(app.jump); /* Explicit menu jump remains available. */
     app.jump_percent=50;snapshot("jump");
     tap(100,820);CHECK(app.jump_percent==45);
     tap(600,820);CHECK(app.jump_percent==50);
@@ -1729,8 +1768,11 @@ int main(int argc, char** argv) {
     tap(80,150);CHECK(!app.annotation_open);app.menu=true;
     reader_annotations_close();app.opened=note_opened;app.runtime.location.book_id=note_book;
     host_sd=note_sd;
-    CHECK(reading_menu_press(180,1160)); /* One contact enters; release is consumed by the input owner. */
-    CHECK(app.page==THINGSOS_UI_FONTS && !app.menu && app.font.face==original);
+    CHECK(reading_menu_press(180,1160)); /* Row 2 left enters bookmarks list. */
+    CHECK(app.page==THINGSOS_UI_BOOKMARKS && !app.menu);
+    navigate(THINGSOS_UI_READING);app.menu=true;
+    CHECK(reading_menu_press(550,1160) && app.page==THINGSOS_UI_READER_MORE);
+    CHECK(reader_more_press(410,134) && app.page==THINGSOS_UI_FONTS && !app.menu && app.font.face==original);
     app.wd_id[0]=0;
     app.font_count=4;
     strcpy(app.fonts[0],"FZSongYJW.TTF");strcpy(app.fonts[1],"FZS3JW.TTF");
@@ -1814,82 +1856,35 @@ int main(int argc, char** argv) {
     snapshot("reading-indexing");
     charging_status_test();
     unsigned battery_saved=app.battery;
-    unsigned ui_px_saved=app.ui_px;
     thingsos_ui_page_t status_page_saved=app.page;
-    const unsigned pcts[]={1,9,50,99,100};
-    for(unsigned scale_idx=0;scale_idx<2;++scale_idx) {
-        if(scale_idx){navigate(THINGSOS_UI_LIBRARY);app.ui_px=38;}
-        for(unsigned idx=0;idx<sizeof(pcts)/sizeof(pcts[0]);++idx) {
-            app.battery=pcts[idx];
-            if(scale_idx)draw();else draw_status();
-            int bat_y0=74,bat_y1=-1;
-            for(int y=10;y<64;++y)for(int x=612;x<666;++x) {
-                if(app.canvas.pixels[(size_t)y*684+x]<224) {
-                    if(y<bat_y0)bat_y0=y;
-                    if(y>bat_y1)bat_y1=y;
-                }
-            }
-            CHECK(bat_y0==26 && bat_y1==48);
-            bool col_ink[684]={0};
-            for(int x=456;x<612;++x)
-                for(int y=10;y<64;++y)
-                    if(app.canvas.pixels[(size_t)y*684+x]<224){col_ink[x]=true;break;}
-            int num_x1=611;while(num_x1>=456 && !col_ink[num_x1])--num_x1;
-            CHECK(num_x1>456);
-            int num_x0=num_x1, gap=0;
-            for(int x=num_x1-1;x>=456;--x) {
-                if(col_ink[x]){num_x0=x;gap=0;}
-                else if(++gap>7)break;
-            }
-            int num_y0=74,num_y1=-1;
-            for(int y=10;y<64;++y)for(int x=num_x0;x<=num_x1;++x) {
-                if(app.canvas.pixels[(size_t)y*684+x]<224) {
-                    if(y<num_y0)num_y0=y;
-                    if(y>num_y1)num_y1=y;
-                }
-            }
-            int wifi_x1=num_x0-1;while(wifi_x1>=456 && !col_ink[wifi_x1])--wifi_x1;
-            CHECK(wifi_x1>456);
-            int wifi_x0=wifi_x1;gap=0;
-            for(int x=wifi_x1-1;x>=456;--x) {
-                if(col_ink[x]){wifi_x0=x;gap=0;}
-                else if(++gap>7)break;
-            }
-            int wifi_y0=74,wifi_y1=-1;
-            for(int y=10;y<64;++y)for(int x=wifi_x0;x<=wifi_x1;++x) {
-                if(app.canvas.pixels[(size_t)y*684+x]<224) {
-                    if(y<wifi_y0)wifi_y0=y;
-                    if(y>wifi_y1)wifi_y1=y;
-                }
-            }
-            int num_bat_gap=612-1-num_x1;
-            int wifi_num_gap=num_x0-1-wifi_x1;
-            int v_diff=(num_y0+num_y1)-(bat_y0+bat_y1);
-            if(v_diff<0)v_diff=-v_diff;
-            int w_diff=(wifi_y0+wifi_y1)-(bat_y0+bat_y1);
-            if(w_diff<0)w_diff=-w_diff;
-            CHECK(num_bat_gap==8 && wifi_num_gap==12);
-            CHECK(v_diff<=(scale_idx?2:1) && w_diff<=2);
-        }
-    }
-    app.ui_px=ui_px_saved;app.page=status_page_saved;app.font.ui_size_percent=0;
-    app.battery=100;
-    bool wifi_saved=host_network_connected,hotspot_saved=app.hotspot;
+    time_t clock_saved=host_wall_time;
+    bool wifi_saved=host_network_connected,enabled_saved=host_wifi_enabled;
+    app.page=THINGSOS_UI_HOME;app.battery=100;
+    host_wifi_enabled=true;host_network_connected=false;host_wall_time=1;
+    snapshot("status-wifi-disconnected");
+    int num_left=0,num_right=0;
+    CHECK(thingsos_font_size(ui_font(),24));
+    CHECK(thingsos_text_ink_box(ui_font(),"100%",136,&num_left,&num_right,NULL,NULL,NULL));
+    num_left+=600-9-num_right;
+    int wifi_left=num_left-46;
+    CHECK(app.canvas.pixels[32u*684+653]==0 && app.canvas.pixels[32u*684+654]==255);
+    for(int y=0;y<74;++y)for(int x=0;x<wifi_left;++x)CHECK(app.canvas.pixels[y*684+x]==255);
+    for(int x=592;x<600;++x)for(int y=10;y<64;++y)CHECK(app.canvas.pixels[y*684+x]==255);
+    CHECK(app.canvas.pixels[29u*684+wifi_left+5]<200);
     host_network_connected=true;snapshot("status-wifi-connected");
-    unsigned char* online_status=malloc(684u*74u);CHECK(online_status);
-    memcpy(online_status,app.canvas.pixels,684u*74u);
-    host_network_connected=false;snapshot("status-wifi-disconnected");
-    unsigned changed=0;
-    for(unsigned y=0;y<74;++y)for(unsigned x=0;x<684;++x) {
-        bool different=online_status[y*684+x]!=app.canvas.pixels[y*684+x];
-        if(different) {CHECK(x>=450 && x<560 && y>=26 && y<50);++changed;}
+    CHECK(app.canvas.pixels[29u*684+wifi_left+5]==255);
+    host_wifi_enabled=false;host_network_connected=false;snapshot("status-wifi-off");
+    for(int y=0;y<74;++y)for(int x=0;x<num_left;++x)CHECK(app.canvas.pixels[y*684+x]==255);
+    host_wall_time=calendar_time(2026,10,21);draw_status();
+    unsigned time_ink=0;
+    for(int y=0;y<74;++y)for(int x=0;x<num_left;++x) {
+        if(app.canvas.pixels[y*684+x]==255)continue;
+        CHECK(x>=30 && x<150);++time_ink;
     }
-    CHECK(changed>40);free(online_status);
-    app.hotspot=true;draw_status();
-    CHECK(!status_wifi_ink(5.5f,3.5f,true) && status_wifi_ink(5.5f,3.5f,false));
-    host_network_connected=wifi_saved;app.hotspot=hotspot_saved;
-    app.battery=battery_saved;draw();
-    CHECK(app.canvas.pixels[26u*684+612]==0 && app.canvas.pixels[32u*684+662]==0);
+    CHECK(time_ink>30);
+    host_network_connected=wifi_saved;host_wifi_enabled=enabled_saved;host_wall_time=clock_saved;
+    app.page=status_page_saved;app.battery=battery_saved;draw();
+    CHECK(app.canvas.pixels[26u*684+600]==0 && app.canvas.pixels[32u*684+650]==0);
     size_t marks_before_status_tap=app.runtime.bookmark_count;
     tap(660,35);
     CHECK(app.runtime.bookmark_count==marks_before_status_tap && !app.menu);
@@ -1905,9 +1900,23 @@ int main(int argc, char** argv) {
     CHECK(app.page_count == indexed_pages && !app.pagination_valid);
     CHECK(pagination_step());
     CHECK(app.page_count > indexed_pages);
+    CHECK(load_chapter(1));
+    app.start = 3; /* A restored position inside the short second chapter. */
+    app.history[app.history_count++] = app.start; /* Ignore a stale current-page entry. */
+    next_page(false);
+    CHECK(app.chapter_index == 1 && app.start == 0 && !app.history_count &&
+          app.runtime.location.chapter == 1 && app.runtime.location.byte_offset == 0);
     CHECK(load_chapter(0));
     app.start = 0;
     CHECK(paginate());
+    size_t chapter_one = thingsos_page_find(app.pages, app.page_count, 1, 0);
+    CHECK(go_page(chapter_one) && app.chapter_index == 1 && app.start == 0);
+    app.start = 3; /* Restored source position inside the first page of chapter 1. */
+    next_page(false);
+    CHECK(app.chapter_index == 1 && app.start == 0);
+    next_page(false);
+    CHECK(app.chapter_index == 0);
+    CHECK(go_page(0));
     CHECK(app.page_count >= 2);
     /* Cross-chapter construction must not change live position, text or image hits. */
     unsigned cache_chapter=app.chapter_index;
@@ -1921,12 +1930,12 @@ int main(int argc, char** argv) {
     reader_cache_clear();
     navigate(THINGSOS_UI_READING);
     snapshot("reading");
-    unsigned date_ink=0,title_ink=0;
+    unsigned reading_time_ink=0,title_ink=0;
     for(int yy=0;yy<74;++yy) {
-        for(int xx=28;xx<218;++xx)date_ink+=app.canvas.pixels[(size_t)yy*684+xx]<128;
-        for(int xx=222;xx<502;++xx)title_ink+=app.canvas.pixels[(size_t)yy*684+xx]<128;
+        for(int xx=30;xx<140;++xx)reading_time_ink+=app.canvas.pixels[(size_t)yy*684+xx]<128;
+        for(int xx=140;xx<430;++xx)title_ink+=app.canvas.pixels[(size_t)yy*684+xx]<128;
     }
-    CHECK(date_ink>0 && title_ink>0);
+    CHECK(reading_time_ink>0 && title_ink>0);
     size_t saved_start = app.start;
     unsigned suspends_before=host_suspend,resumes_before=host_resume;
     power_action(1);
@@ -1957,11 +1966,9 @@ int main(int argc, char** argv) {
     tap(200, 140);
     CHECK(app.page == THINGSOS_UI_READING && !app.menu); /* Old lowered region only dismisses. */
     capacitive_key(THINGSOS_KEY_MENU);
-    snapshot("reader-back-top-left");
-    CHECK(app.canvas.pixels[36u*684+40]==0 && app.canvas.pixels[174u*684+24]==255);
+    snapshot("reader-menu-with-status");
     tap(40,35);
-    CHECK(app.page == THINGSOS_UI_LIBRARY && !app.menu);
-    navigate(THINGSOS_UI_READING);
+    CHECK(app.page == THINGSOS_UI_READING && !app.menu);
     CHECK(go_page(app.page_count - 1));
     next_page(false);
     CHECK(current_page() == app.page_count - 2);
@@ -1976,6 +1983,20 @@ int main(int argc, char** argv) {
     app.start = app.chapter.bytes;
     CHECK(current_page() < app.page_count);
     CHECK(go_page(0));
+    /* Independent "Add Bookmark" action is idempotent and stays in reading. */
+    size_t marks_before_add = app.runtime.bookmark_count;
+    app.menu = true;
+    CHECK(reading_menu_press(342, 1070));
+    CHECK(app.page == THINGSOS_UI_READING && app.menu);
+    CHECK(app.runtime.bookmark_count == marks_before_add + 1);
+    CHECK(app.records.mark_count == app.runtime.bookmark_count);
+    CHECK(reading_menu_press(342, 1070)); /* Repeat add keeps the bookmark. */
+    CHECK(app.page == THINGSOS_UI_READING && app.runtime.bookmark_count == marks_before_add + 1);
+    CHECK(app.records.mark_count == app.runtime.bookmark_count);
+    app.menu = false;
+    /* Legacy toggle still removes and re-adds cleanly. */
+    feature_toggle_mark();
+    CHECK(app.runtime.bookmark_count == marks_before_add);
     feature_toggle_mark();
     app.runtime.bookmarks[app.runtime.bookmark_count++] = (thingsos_location_t){ 999, 0, 0 };
     navigate(THINGSOS_UI_BOOKMARKS);
@@ -2425,11 +2446,11 @@ int main(int argc, char** argv) {
     next_page(true);draw();CHECK(app.start==known_next&&reader_cache_hits==early_hits+1);
     app.pagination_valid=true;app.history_count=0;reader_cache_clear();
     /* Both directions: cached pixels/end offset equal a fresh production draw. */
-    thingsos_text_underline_t cached_mark={app.pages[2].offset,app.pages[2].offset+30,false};
+    thingsos_text_underline_t cached_underline={app.pages[2].offset,app.pages[2].offset+30,false};
     const thingsos_text_underline_t* saved_marks=app.chapter.underlines;size_t saved_mark_count=app.chapter.underline_count;
     uint64_t cache_note_book=app.runtime.location.book_id;app.runtime.location.book_id=778899;
     reader_annotations_close();CHECK(reader_annotations_store());
-    thingsos_annotation_t cache_note={0};cache_note.chapter=0;cache_note.begin=(uint32_t)cached_mark.begin;cache_note.end=(uint32_t)cached_mark.end;
+    thingsos_annotation_t cache_note={0};cache_note.chapter=0;cache_note.begin=(uint32_t)cached_underline.begin;cache_note.end=(uint32_t)cached_underline.end;
     cache_note.text_crc=thingsos_annotation_crc(app.chapter.text,app.chapter.bytes);
     memcpy(cache_note.quote,app.chapter.text+cache_note.begin,30);
     for(unsigned i=app.annotations->count;i>0;--i)CHECK(thingsos_annotations_remove(app.annotations,app.annotations->notes[i-1].id));
@@ -2674,7 +2695,12 @@ int main(int argc, char** argv) {
     host_tilt_x=host_tilt_y=0;host_tilt_z=1000;host_clock_us=1000000;app.menu=true;
     /* More is a reader child page; both menu layouts preserve existing actions. */
     CHECK(thingsos_reader_menu_hit_weidu(500,1150,NULL)==THINGSOS_MENU_MORE);
-    CHECK(thingsos_reader_menu_hit(104,1205,NULL)==THINGSOS_MENU_FONTS);
+    CHECK(thingsos_reader_menu_hit(104,1205,NULL)==THINGSOS_MENU_JUMP);
+    CHECK(thingsos_reader_menu_hit(342,1070,NULL)==THINGSOS_MENU_ADD_BOOKMARK);
+    CHECK(thingsos_reader_menu_hit(500,1070,NULL)==THINGSOS_MENU_BOOKMARKS);
+    CHECK(thingsos_reader_menu_hit_weidu(500,1070,NULL)==THINGSOS_MENU_BOOKMARKS);
+    CHECK(thingsos_reader_menu_hit_weidu(342,1070,NULL)==THINGSOS_MENU_ADD_BOOKMARK);
+    CHECK(thingsos_reader_menu_hit_weidu(130,1150,NULL)==THINGSOS_MENU_JUMP);
     CHECK(thingsos_reader_menu_hit_weidu(500,1215,NULL)==THINGSOS_MENU_MORE);
     CHECK(thingsos_reader_menu_hit_weidu(235,1215,NULL)==THINGSOS_MENU_NONE);
     CHECK(thingsos_reader_menu_hit(104,1216,NULL)==THINGSOS_MENU_NONE);
@@ -2725,6 +2751,12 @@ int main(int argc, char** argv) {
     CHECK(thingsos_reader_menu_hit_landscape(1000,620,NULL,false)==THINGSOS_MENU_MORE);
     CHECK(thingsos_reader_menu_hit_landscape(1000,683,NULL,false)==THINGSOS_MENU_MORE);
     CHECK(thingsos_reader_menu_hit_landscape(1000,684,NULL,false)==THINGSOS_MENU_NONE);
+    CHECK(thingsos_reader_menu_hit_landscape(600,520,NULL,false)==THINGSOS_MENU_ADD_BOOKMARK);
+    CHECK(thingsos_reader_menu_hit_landscape(600,520,NULL,true)==THINGSOS_MENU_ADD_BOOKMARK);
+    CHECK(thingsos_reader_menu_hit_landscape(1000,520,NULL,false)==THINGSOS_MENU_BOOKMARKS);
+    CHECK(thingsos_reader_menu_hit_landscape(1000,520,NULL,true)==THINGSOS_MENU_BOOKMARKS);
+    CHECK(thingsos_reader_menu_hit_landscape(300,620,NULL,false)==THINGSOS_MENU_JUMP);
+    CHECK(thingsos_reader_menu_hit_landscape(200,620,NULL,true)==THINGSOS_MENU_JUMP);
     CHECK(thingsos_reader_menu_hit_landscape(600,620,NULL,true)==THINGSOS_MENU_NOTES);
     CHECK(thingsos_reader_menu_hit_landscape(410,520,NULL,false)==THINGSOS_MENU_NONE);
     unsigned wide_choice=9;CHECK(thingsos_reader_menu_hit_landscape(1060,390,&wide_choice,false)==THINGSOS_MENU_NONE);
@@ -2775,6 +2807,9 @@ int main(int argc, char** argv) {
     power_action(1);CHECK(!app.asleep && app.landscape_enabled);draw();CHECK(app.canvas.width==1216);
     app.menu=true;app.wd_id[0]='x';app.wd_id[1]=0;snapshot("landscape-menu-weidu");app.wd_id[0]=0;
     tap(1000,620);CHECK(app.page==THINGSOS_UI_READER_MORE);
+    tap(942,134);CHECK(app.page==THINGSOS_UI_FONTS && app.font_from_reader);
+    tap(100,1040);CHECK(app.page==THINGSOS_UI_READING && app.menu);
+    tap(1000,620);CHECK(app.page==THINGSOS_UI_READER_MORE);
     app.landscape_enabled=false;host_nvs_read=true;preferences_load();CHECK(app.landscape_enabled);host_nvs_read=false;
     landscape_start=app.start;tap(430,430);CHECK(!app.landscape_enabled && !host_saved_landscape && app.start==landscape_start);
     CHECK(app.canvas.width==684 && app.canvas.height==1216);tap(30,120);CHECK(app.menu);
@@ -2808,7 +2843,19 @@ int main(int argc, char** argv) {
     CHECK(original_offset>0 && app.epub.chapter_sources[1]==0);
     CHECK(reader_restore_source(0,original_offset+4));
     CHECK(app.chapter_index==1 && app.start==4);
-    CHECK(reader_lines[1]==145 && reader_margins[1]==24 && reader_lines[0]<145 && reader_margins[0]<24);
+    /* Verify "Add Bookmark" stores split-chapter source chapter & offset without mutating runtime location. */
+    app.opened=true;app.runtime.location=(thingsos_location_t){42,1,4};
+    size_t split_marks=app.runtime.bookmark_count;
+    feature_add_mark();
+    CHECK(app.runtime.bookmark_count==split_marks+1);
+    CHECK(app.runtime.bookmarks[split_marks].book_id==42 &&
+          app.runtime.bookmarks[split_marks].chapter==0 &&
+          app.runtime.bookmarks[split_marks].byte_offset==(uint32_t)(original_offset+4));
+    CHECK(app.runtime.location.chapter==1 && app.runtime.location.byte_offset==4);
+    feature_add_mark();
+    CHECK(app.runtime.bookmark_count==split_marks+1);
+    CHECK(reader_lines[1]==145 && reader_lines[0]<145);
+    CHECK(reader_margins[0]==24 && reader_margins[1]==36 && reader_margins[2]==54);
     release_book();
     /* Explicit cover selection: cancel and commit failure preserve the old
        source; reading another book cannot silently replace the chosen cover. */

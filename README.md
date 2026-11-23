@@ -4,17 +4,94 @@ ReverieOS 是我为个人学习和练习维护的 Read Pico（RDP-G01-W）固件
 
 感谢 ThingsOS 作者和贡献者公开源码，也感谢 MindReset 和各第三方项目的贡献。ReverieOS 是个人 fork，与上游的官方发布各自独立。
 
+## 当前版本
+
+**`0.4.2-R-1`** · Read Pico RDP-G01-W · ESP32-S3 · 16 MiB Flash
+
+本分支提供 R-1 的对应源码和本地构建步骤。发布前的 macOS Host 回归为 **51/51**。该次实机使用现有兼容分区布局做了主应用单槽写入，回读摘要匹配，启动串口确认了 `0.4.2-R-1`。完整 USB 镜像通过离线合成和分区内容验证，跨系统整机刷写尚未实测。
+
+本次已验证主应用为 6,676,032 B，SHA-256 为 `6f9a2d5dbce06c55fbcbdb69d86a5208d70540fe9d3e1682e365649307f1d60f`。自行构建的时间戳和路径可能导致摘要不同，以本机生成文件的校验结果为准。
+
 ## 修改内容
 
-- 阅读首页、书库导航、菜单和状态栏。
-- EPUB 章节和翻页行为，以及中文排版与分页。
-- macOS 上的构建、测试和设备联调。
+- 重做首页、书库导航、阅读菜单、状态栏和未缓存封面角标。R-1 将「继续阅读」与「最近阅读」分开，最近列表最多展示另外三本书，并调整首页卡片与入口的对比度。
+- 调整 EPUB 章节标题、上一页章内回退、中文标点折行与悬挂，以及 24 / 36 / 54 px 页边距。保留源字节偏移和相应的分页回归。
+- 调整 USB MSC 重枚举、SD 多扇区传输和就绪检测，并补充 macOS Host 测试。直接挂载表现仍需按设备和 SD 卡复验。
+
+### 相对 ThingsOS 0.4.2 的文件差异
+
+比对基线为 [上游 Read Pico 源码发布提交 `2723571`](https://github.com/flowflic/ThingsOS/tree/2723571f2e0e0ffc98e8e7ca6df8af82609d69d1/release-source-pico-0.4.2)。Pico 快照内共修改 24 个文件、新增 6 个源码或测试文件和 1 个软链。表中路径相对 `release-source-pico-0.4.2/ThingsOS/native/`。
+
+| 范围 | 文件 |
+| --- | --- |
+| 构建、板级与网络 | `CMakeLists.txt`、`firmware/components/thingsos_board/tusb_config.h`、`firmware/components/thingsos_board/usb_storage.c`、`firmware/components/thingsos_core/CMakeLists.txt`、`firmware/components/thingsos_net/network.c`、`firmware/components/thingsos_net/network.h` |
+| 阅读界面、微读和应用流程 | `firmware/main/features.inc`、`firmware/main/lock_pin.inc`、`firmware/main/main.c`、`firmware/main/reader_cache.inc`、`firmware/main/stats_ui.inc`、`firmware/main/weidu_online_ui.inc`、`firmware/main/weidu_ui.inc` |
+| 排版、分页、EPUB 和 UI 模块 | `include/thingsos/pagination.h`、`include/thingsos/reader_ui.h`、`include/thingsos/ui.h`、`src/epub.c`、`src/graphics.c`、`src/pagination.c`、`src/reader_ui.c`、`include/thingsos/home_ui.h`、`src/home_ui.c` |
+| 回归用例与 vendor 清单 | `tests/content_test.c`、`tests/device_ui_stubs.h`、`tests/device_ui_test.c`、`vendor/sources.json`、`tests/clreq_test.c`、`tests/epub_heading_prev_test.c`、`tests/home_ui_test.c`、`tests/reader_ui_test.c` |
+
+新增文件是 `include/thingsos/home_ui.h`、`src/home_ui.c`、`tests/clreq_test.c`、`tests/epub_heading_prev_test.c`、`tests/home_ui_test.c`、`tests/reader_ui_test.c`。另在快照根新增 `fonts → ThingsOS/fonts`，供资产生成脚本定位字体。
+
+## 从其他系统通过 USB 安装
+
+适用于 Read Pico RDP-G01-W（ESP32-S3、16 MiB Flash），需要电脑和 USB 数据线。从原厂、其他系统或分区布局未知的版本迁入时，使用完整 USB 镜像，从地址 `0x0` 写入。完整安装会覆盖旧系统和内部设置，先备份 SD 卡数据以及同一台设备的 Flash。设备开启 Secure Boot、Flash Encryption，或芯片与容量不匹配时，停止并按原系统的恢复指引处理。
+
+### 1. 本地生成完整 USB 镜像
+
+安装并激活 [项目固定的 ESP-IDF 6.1 提交](https://github.com/espressif/esp-idf/commit/fff9895c82d744c7237be8847347bdd1b07c6643)，安装 `esp32s3` 工具链。以下命令适用于已激活 IDF 的 macOS / Linux shell。从仓库根目录执行。需在快照的 `fonts/方正屏显雅宋.TTF` 路径提供你有权使用的默认字体，按 [许可说明](LICENSES.md) 处理字体和第三方材料。
+
+```sh
+cd release-source-pico-0.4.2
+export IDF_TARGET=esp32s3
+mkdir -p ThingsOS/build
+python ThingsOS/native/prepare_dependencies.py
+python ThingsOS/native/prepare_assets.py
+
+idf.py -C ThingsOS/native/rescue -B "$PWD/ThingsOS/build/native-rescue" build
+idf.py -C ThingsOS/native/firmware -B "$PWD/ThingsOS/build/native-idf" \
+  -DTHINGSOS_BUILD_VERSION=0.4.2-R-1 build
+
+build_dir=ThingsOS/build/native-idf
+python -m esptool --chip esp32s3 image-info "$build_dir/ThingsOS_native.bin"
+python -m esptool --chip esp32s3 merge-bin --flash-mode dio --flash-size 16MB --flash-freq 80m \
+  -o ReverieOS-0.4.2-R-1-usb.bin \
+  0x0 "$build_dir/bootloader/bootloader.bin" \
+  0x8000 "$build_dir/partition_table/partition-table.bin" \
+  0xf000 "$build_dir/ota_data_usb.bin" \
+  0x20000 ThingsOS/build/native-rescue/ThingsOS_rescue.bin \
+  0x220000 "$build_dir/ThingsOS_native.bin" \
+  0xd00000 "$build_dir/system_font.bin"
+shasum -a 256 ReverieOS-0.4.2-R-1-usb.bin
+```
+
+确认 `image-info` 显示 `ESP32-S3`、项目 `ThingsOS_native`、版本 `0.4.2-R-1`，镜像校验通过。完整 USB 镜像由 bootloader、分区表、OTA 启动选择、救援、主应用和系统字体组成。默认系统字体需在本机生成。
+
+### 2. 连接、备份并刷写
+
+1. 在原系统中退出 USB 磁盘模式，关闭可能占用串口的程序，用数据线连接 Read Pico。如果自动连接失败，从原系统的「升级和恢复」进入其 BOOT / 下载模式，再重试。串口示例为 macOS 的 `/dev/cu.usbmodem…`、Linux 的 `/dev/ttyACM0`、Windows 的 `COM3`。参见 [MindReset Read Pico 刷机说明](https://dot.mindreset.tech/docs/read_0/firmware) 和 [连接问题](https://dot.mindreset.tech/docs/read_0/faq/firmware_install)。
+2. 将下方 `PORT` 替换为实际串口，核对芯片、Flash 容量和安全状态。先读取完整 16 MiB Flash，确认备份读取成功、长度为 16,777,216 字节，并在本地妥善保存。另行备份 SD 卡的书籍及原系统专用数据。
+3. 核对设备与本地镜像后启动写入，保持 USB 连接直至报告校验通过。设备重启后，在设置页核对版本，确认能进入书库并打开书籍。
+
+```sh
+PORT=/dev/cu.usbmodem101  # 示例，改为实际串口
+python -m esptool --chip esp32s3 --port "$PORT" flash-id
+python -m esptool --chip esp32s3 --port "$PORT" get-security-info
+backup="read-pico-before-reverie-$(date +%Y%m%d-%H%M%S).bin"
+python -m esptool --chip esp32s3 --port "$PORT" read-flash 0x0 0x1000000 "$backup"
+wc -c < "$backup"
+shasum -a 256 "$backup"
+
+python -m esptool --chip esp32s3 --port "$PORT" --baud 460800 \
+  write-flash --flash-mode dio --flash-size 16MB --flash-freq 80m \
+  0x0 ReverieOS-0.4.2-R-1-usb.bin
+```
+
+`ThingsOS_native.bin` 是仅供兼容分区布局的应用镜像。已装兼容 ThingsOS 或 ReverieOS 的设备可在其救援升级页面按提示上传该文件。完整 USB 镜像用于上面的跨系统安装。参见 [Espressif esptool 5 命令](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/esptool/basic-commands.html)。
 
 ## 源码与上游资料
 
-本分支关注 Read Pico（ESP32-S3）。Read Pico 源码位于 [0.4.2 发布快照](release-source-pico-0.4.2/)，构建入口在该快照的 `ThingsOS/native/`。`pico` 是本仓库的 Read Pico 分支。`upstream-mirror` 保留完整的上游源码，供后续同步和比对。
+固件构建入口位于 [Read Pico 源码快照](release-source-pico-0.4.2/)的 `ThingsOS/native/`。`pico` 是本仓库的 Read Pico 分支。`upstream-mirror` 保留完整上游源码，供后续同步和比对。
 
-原项目说明、安装向导和固件发布请查看 [ThingsOS 上游仓库](https://github.com/flowflic/ThingsOS) 与 [上游发布网站](https://thingsos.scholarcn.com)。
+原项目说明、安装向导和官方固件请查看 [ThingsOS 上游仓库](https://github.com/flowflic/ThingsOS) 与 [上游发布网站](https://thingsos.scholarcn.com)。
 
 ## 开源许可
 

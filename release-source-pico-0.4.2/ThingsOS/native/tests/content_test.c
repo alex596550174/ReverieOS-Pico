@@ -152,7 +152,8 @@ static void punctuation_wrap_test(thingsos_font_t* font,thingsos_canvas_t* canva
             thingsos_chapter_t ch={0};ch.text=text;ch.bytes=strlen(text);
             for(unsigned epub=0;epub<2;++epub) {
                 size_t end=thingsos_text_page_layout(font,NULL,&ch,0,36,90,width,(int)font->size,145,0,epub!=0,NULL,NULL,NULL);
-                CHECK(end==9); /* Move the last character together with its punctuation. */
+                bool pair = !strcmp(endings[i],"……") || !strcmp(endings[i],"——");
+                CHECK(end==(pair?12:9)); /* Pairs may start a line. Other closers follow the preceding character. */
                 memset(canvas->pixels,255,684u*1216u);
                 CHECK(thingsos_text_page_layout(font,canvas,&ch,0,36,90,width,(int)font->size,145,0,epub!=0,NULL,NULL,NULL)==end);
                 CHECK(thingsos_text_page_layout(font,NULL,&ch,end,36,90,width,(int)font->size,145,0,epub!=0,NULL,NULL,NULL)>12);
@@ -162,7 +163,9 @@ static void punctuation_wrap_test(thingsos_font_t* font,thingsos_canvas_t* canva
                 ch.underlines=underlines;ch.underline_count=2;
                 thingsos_text_hits_t hits={0};
                 CHECK(thingsos_text_page_layout(font,NULL,&ch,0,36,90,width,600,145,0,epub!=0,NULL,NULL,&hits)==ch.bytes);
-                CHECK(hits.line_count==2 && hits.lines[0].y==hits.lines[1].y && hits.lines[1].x>hits.lines[0].x);
+                CHECK(hits.line_count==2);
+                if(pair) CHECK(hits.lines[0].y<hits.lines[1].y);
+                else CHECK(hits.lines[0].y==hits.lines[1].y && hits.lines[1].x>hits.lines[0].x);
                 ch.underlines=NULL;ch.underline_count=0;
                 CHECK(!strcmp(text,original)); /* Bookmarks and source mappings keep byte offsets. */
             }
@@ -179,11 +182,10 @@ static void punctuation_wrap_test(thingsos_font_t* font,thingsos_canvas_t* canva
             thingsos_text_hits_t hits={0};
             size_t end=thingsos_text_page_layout_flow(font,NULL,&prose,0,36,90,4*cell,height,
                 145,0,true,NULL,NULL,&hits,false,cell/2);
-            CHECK(end==(i==2?9:15));
-            CHECK(hits.glyph_count==(i==2?3:5));
+            CHECK(end==(i==2?12:15));
+            CHECK(hits.glyph_count==(i==2?4:5));
             CHECK(hits.glyphs[hits.glyph_count-1].y==hits.glyphs[0].y);
-            if(i==2) CHECK(hits.glyphs[2].x>36+2*cell);
-            else CHECK(hits.glyphs[4].x+hits.glyphs[4].w<=36+4*cell+cell/2);
+            if(i!=2) CHECK(hits.glyphs[4].x+hits.glyphs[4].w<=36+4*cell+cell/2);
             memset(canvas->pixels,255,684u*1216u);
             CHECK(thingsos_text_page_layout_flow(font,canvas,&prose,0,36,90,4*cell,height,
                 145,0,true,NULL,NULL,NULL,false,cell/2)==end);
@@ -719,7 +721,7 @@ int main(int argc, char** argv) {
         clean.text="Body text.";clean.bytes=strlen(clean.text);clean.heading=false;
         memset(canvas.pixels,255,684u*1216u);
         CHECK(thingsos_text_page_layout(&font,&canvas,&clean,0,24,90,636,1040,145,0,true,NULL,NULL, NULL)==clean.bytes);
-        CHECK(!memcmp(expected,canvas.pixels,684u*1216u)); /* Heading exists only in reader header. */
+        CHECK(memcmp(expected,canvas.pixels,684u*1216u)); /* The inline heading also paints in the body. */
         CHECK(!strcmp(original,"Title\nBook\nTitle\nBody text."));free(expected);
         CHECK(thingsos_font_size(&font,32));
     }
@@ -760,9 +762,9 @@ int main(int argc, char** argv) {
     CHECK(thingsos_reader_menu_hit(550,975,&selection)==THINGSOS_MENU_NONE);
     CHECK(thingsos_reader_menu_hit(220,1005,&selection)==THINGSOS_MENU_NONE);
     CHECK(thingsos_reader_menu_hit(60,1060,&selection)==THINGSOS_MENU_CHAPTERS);
-    CHECK(thingsos_reader_menu_hit(300,1060,&selection)==THINGSOS_MENU_BOOKMARKS);
-    CHECK(thingsos_reader_menu_hit(500,1060,&selection)==THINGSOS_MENU_JUMP);
-    CHECK(thingsos_reader_menu_hit(60,1150,&selection)==THINGSOS_MENU_FONTS);
+    CHECK(thingsos_reader_menu_hit(300,1060,&selection)==THINGSOS_MENU_ADD_BOOKMARK);
+    CHECK(thingsos_reader_menu_hit(500,1060,&selection)==THINGSOS_MENU_BOOKMARKS);
+    CHECK(thingsos_reader_menu_hit(60,1150,&selection)==THINGSOS_MENU_JUMP);
     CHECK(thingsos_reader_menu_hit(500,1150,&selection)==THINGSOS_MENU_MORE);
     CHECK(thingsos_reader_menu_hit(625,490,&selection)==THINGSOS_MENU_CLOSE);
     path(p,root,"rendered-reader-menu.pgm"); f=fopen(p,"wb"); CHECK(f);

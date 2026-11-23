@@ -22,6 +22,8 @@
 
 static sdmmc_card_t* card;
 static uint8_t* dma_sector;
+static size_t dma_cap;
+static int64_t next_card_check;
 static SemaphoreHandle_t access, stopped;
 static usb_phy_handle_t phy;
 static volatile bool running, mounted;
@@ -59,9 +61,25 @@ void tud_resume_cb(void){}
 void tud_msc_inquiry_cb(uint8_t lun,uint8_t vendor[8],uint8_t product[16],uint8_t revision[4]) {
     (void)lun;memcpy(vendor,"ThingsOS",8);memcpy(product,"SD Card         ",16);memcpy(revision,"0302",4);
 }
+/* Called with access held. A single failed I2C read isn't a removal. */
+static bool usb_sd_present_debounced(void) {
+    bool present=false;
+    for(unsigned sample=0;sample<3;++sample) {
+        if(sample)vTaskDelay(pdMS_TO_TICKS(5));
+        if(read_pico_sd_present())present=true;
+    }
+    return present;
+}
+static void usb_sd_check_removal(void) {
+    next_card_check=esp_timer_get_time()+500000;
+    if(!usb_sd_present_debounced()) {
+        disk.enabled=false;
+        last_error=ESP_ERR_NOT_FOUND;
+    }
+}
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
     xSemaphoreTake(access,portMAX_DELAY);
-    if(!read_pico_sd_present()){disk.enabled=false;last_error=ESP_ERR_NOT_FOUND;}
+    if(disk.enabled && !disk.ejected && esp_timer_get_time()>=next_card_check)usb_sd_check_removal();
     bool ready=disk.enabled && !disk.ejected;
     xSemaphoreGive(access);
     if(!ready)tud_msc_set_sense(lun,SCSI_SENSE_NOT_READY,0x3a,0);
@@ -77,21 +95,43 @@ bool tud_msc_start_stop_cb(uint8_t lun,uint8_t power,bool start,bool load_eject)
     if(load_eject)disk.ejected=!start;
     xSemaphoreGive(access);return true;
 }
+/* Both the aligned fast path and partial-sector fallback own access. */
+static bool sd_transfer(bool write, uint64_t lba, size_t sectors) {
+    for(unsigned attempt=0;attempt<2;++attempt) {
+        if(attempt)vTaskDelay(pdMS_TO_TICKS(5));
+        last_error=write?sdmmc_write_sectors(card,dma_sector,(size_t)lba,sectors)
+                        :sdmmc_read_sectors(card,dma_sector,(size_t)lba,sectors);
+        if(last_error==ESP_OK) {
+            if(write)writes+=(unsigned)sectors;
+            else reads+=(unsigned)sectors;
+            return true;
+        }
+    }
+    usb_sd_check_removal();
+    return false;
+}
 static bool read_sector(void* context,uint64_t lba,void* out) {
     (void)context;
-    last_error=read_pico_sd_present()?sdmmc_read_sectors(card,dma_sector,(size_t)lba,1):ESP_ERR_NOT_FOUND;
-    if(last_error!=ESP_OK){if(last_error==ESP_ERR_NOT_FOUND)disk.enabled=false;return false;}
-    memcpy(out,dma_sector,512);++reads;return true;
+    if(!sd_transfer(false,lba,1))return false;
+    memcpy(out,dma_sector,THINGSOS_USB_SECTOR);
+    return true;
 }
 static bool write_sector(void* context,uint64_t lba,const void* in) {
-    (void)context;memcpy(dma_sector,in,512);
-    last_error=read_pico_sd_present()?sdmmc_write_sectors(card,dma_sector,(size_t)lba,1):ESP_ERR_NOT_FOUND;
-    if(last_error!=ESP_OK){if(last_error==ESP_ERR_NOT_FOUND)disk.enabled=false;return false;}
-    ++writes;return true;
+    (void)context;
+    memcpy(dma_sector,in,THINGSOS_USB_SECTOR);
+    return sd_transfer(true,lba,1);
 }
 static int32_t transfer(uint8_t lun,bool write,uint32_t lba,uint32_t offset,void* buffer,uint32_t bytes) {
     xSemaphoreTake(access,portMAX_DELAY);
-    bool ok=thingsos_usb_disk_io(&disk,write,lba,offset,buffer,bytes);
+    bool ok=false;
+    if(!offset && bytes && bytes%THINGSOS_USB_SECTOR==0 && bytes<=dma_cap) {
+        size_t sectors=bytes/THINGSOS_USB_SECTOR;
+        if(buffer && disk.enabled && !disk.ejected && lba<disk.sectors && sectors<=disk.sectors-lba) {
+            if(write)memcpy(dma_sector,buffer,bytes);
+            ok=sd_transfer(write,lba,sectors);
+            if(ok && !write)memcpy(buffer,dma_sector,bytes);
+        }
+    } else ok=thingsos_usb_disk_io(&disk,write,lba,offset,buffer,bytes);
     xSemaphoreGive(access);
     if(!ok){tud_msc_set_sense(lun,SCSI_SENSE_MEDIUM_ERROR,write?0x0c:0x11,0);return -1;}
     return (int32_t)bytes;
@@ -105,7 +145,7 @@ int32_t tud_msc_write10_cb(uint8_t lun,uint32_t lba,uint32_t offset,uint8_t* buf
 int32_t tud_msc_scsi_cb(uint8_t lun,const uint8_t command[16],void* buffer,uint16_t bytes) {
     (void)buffer;(void)bytes;
     /* Raw writes are synchronous; no device-side filesystem cache exists. */
-    if(command[0]==0x35)return 0; /* SYNCHRONIZE CACHE (10) */
+    if(command[0]==0x35 || command[0]==0x1e)return 0; /* SYNCHRONIZE CACHE / PREVENT ALLOW MEDIUM REMOVAL */
     tud_msc_set_sense(lun,SCSI_SENSE_ILLEGAL_REQUEST,0x20,0);return -1;
 }
 static void usb_task(void* unused) {
@@ -118,7 +158,13 @@ esp_err_t thingsos_board_usb_start(void) {
     read_pico_sd_info_t info={0};
     if(read_pico_sd_get_info(&info)==ESP_ERR_NOT_FINISHED || info.mounted || !read_pico_sd_present())return ESP_ERR_INVALID_STATE;
     access=xSemaphoreCreateMutex();stopped=xSemaphoreCreateBinary();
-    dma_sector=heap_caps_malloc(512,MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    dma_cap=CFG_TUD_MSC_EP_BUFSIZE;
+    dma_sector=heap_caps_malloc(dma_cap,MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    if(!dma_sector) {
+        dma_cap=4096;
+        dma_sector=heap_caps_malloc(dma_cap,MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    }
+    if(!dma_sector)dma_cap=0;
     card=calloc(1,sizeof(*card));
     if(!access || !stopped || !dma_sector || !card)return ESP_ERR_NO_MEM;
     sdmmc_host_t host=SDMMC_HOST_DEFAULT();host.max_freq_khz=SDMMC_FREQ_HIGHSPEED;
@@ -142,8 +188,12 @@ esp_err_t thingsos_board_usb_start(void) {
     e=usb_new_phy(&config,&phy);if(e!=ESP_OK)return e;
     const tusb_rhport_init_t port={.role=TUSB_ROLE_DEVICE,.speed=TUSB_SPEED_FULL};
     if(!tusb_rhport_init(0,&port))return ESP_FAIL;
+    next_card_check=0;
     running=true;mounted=false;disconnected_at=esp_timer_get_time();
     if(xTaskCreate(usb_task,"usb_sd",4096,NULL,5,NULL)!=pdPASS){running=false;return ESP_ERR_NO_MEM;}
+    tud_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(150));
+    tud_connect();
     return ESP_OK;
 }
 void thingsos_board_usb_status(thingsos_usb_status_t* out) {

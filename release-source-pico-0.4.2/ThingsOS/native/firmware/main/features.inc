@@ -234,14 +234,51 @@ static void feature_marks_save(void) {
     app.records_dirty = true;
     feature_save();
 }
-static void feature_toggle_mark(void) {
-    if (!app.opened) return;
+static bool feature_mark_prepare(thingsos_location_t* saved) {
+    if (!app.opened) return false;
     if (!thingsos_records_book(&app.records, app.runtime.location.book_id, NULL, NULL)) {
         say("本书没有可保存的记录，无法设置书签");
-        return;
+        return false;
     }
+    if (saved) *saved = app.runtime.location;
     app.runtime.location.chapter = app.epub_open?app.epub.chapter_sources[app.chapter_index]:0;
     app.runtime.location.byte_offset = (uint32_t)(app.start+(app.epub_open?app.chapter.source_start:0));
+    return true;
+}
+static void feature_add_mark(void) {
+    thingsos_location_t saved;
+    if (!feature_mark_prepare(&saved)) return;
+    thingsos_location_t target = app.runtime.location;
+    if (!target.book_id) {
+        app.runtime.location = saved;
+        say("当前书籍无法设置书签");
+        return;
+    }
+    for (size_t i = 0; i < app.runtime.bookmark_count; ++i) {
+        thingsos_location_t m = app.runtime.bookmarks[i];
+        if (m.book_id == target.book_id && m.chapter == target.chapter &&
+            m.byte_offset == target.byte_offset) {
+            app.runtime.location = saved;
+            if (app.records_dirty) feature_save();
+            say(app.records_dirty ? "书签已保存，等待 SD 保存" : "当前位置已有书签");
+            return;
+        }
+    }
+    thingsos_mark_result_t r = thingsos_runtime_toggle_mark(&app.runtime);
+    app.runtime.location = saved;
+    if (r == THINGSOS_MARK_FULL) {
+        say("书签已满（32 个）");
+        return;
+    }
+    if (r == THINGSOS_MARK_INVALID) {
+        say("当前书籍无法设置书签");
+        return;
+    }
+    feature_marks_save();
+    say(app.records_dirty ? "书签已更新，等待 SD 保存" : "书签已保存");
+}
+static void feature_toggle_mark(void) {
+    if (!feature_mark_prepare(NULL)) return;
     thingsos_mark_result_t r = thingsos_runtime_toggle_mark(&app.runtime);
     if (r == THINGSOS_MARK_FULL) {
         say("书签已满（32 个）");

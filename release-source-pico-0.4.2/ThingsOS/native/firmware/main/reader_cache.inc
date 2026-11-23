@@ -314,10 +314,14 @@ static void reader_cache_idle(void) {
     thingsos_page_position_t next;
     if(reader_cache_next(&next) && reader_cache_build(0,next))return;
     if(!app.pagination_valid) {
-        if(app.history_count)reader_cache_build(1,(thingsos_page_position_t){app.chapter_index,(uint32_t)app.history[app.history_count-1]});
+        if(app.history_count) {
+            size_t previous=app.history[app.history_count-1];
+            if(previous<app.start)
+                reader_cache_build(1,(thingsos_page_position_t){app.chapter_index,(uint32_t)previous});
+        }
         return;
     }
-    size_t page=current_page();
+    size_t previous=previous_indexed_page();
     /* At most one page per loop; input is polled again before the other slot. */
-    if(page && reader_cache_build(1,app.pages[page-1])) return;
+    if(previous<app.page_count) reader_cache_build(1,app.pages[previous]);
 }

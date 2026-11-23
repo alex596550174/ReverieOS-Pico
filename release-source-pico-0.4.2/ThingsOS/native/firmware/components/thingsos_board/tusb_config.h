@@ -7,5 +7,5 @@
 #define CFG_TUD_ENABLED 1
 #define CFG_TUD_ENDPOINT0_SIZE 64
 #define CFG_TUD_MSC 1
-#define CFG_TUD_MSC_EP_BUFSIZE 4096
+#define CFG_TUD_MSC_EP_BUFSIZE 8192
 #define CFG_TUSB_MEM_ALIGN __attribute__((aligned(4)))

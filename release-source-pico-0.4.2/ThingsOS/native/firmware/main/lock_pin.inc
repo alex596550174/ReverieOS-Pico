@@ -105,7 +105,8 @@ static void pin_boot(void) {
     pin_load();
     if(app.pin.required){
         app.pin.purpose=PIN_UNLOCK;app.pin.stage=PIN_VERIFY;
-        app.page=THINGSOS_UI_LOCK_PIN;app.menu_root=THINGSOS_UI_LIBRARY;
+        app.page=THINGSOS_UI_LOCK_PIN;
+        app.menu_root=app.lock_return=THINGSOS_UI_HOME;
     }
 #ifndef THINGSOS_HOST_UI
     thingsos_board_private_input(app.pin.required);
@@ -126,6 +127,7 @@ static void pin_open(lock_pin_purpose_t purpose) {
     app.message[0]=0;app.activity_at=now();
 }
 static void pin_wake(void) {
+    if(app.page!=THINGSOS_UI_LOCK && app.page!=THINGSOS_UI_LOCK_PIN) app.lock_return=app.page;
     app.pin.required=true;pin_open(PIN_UNLOCK);
     app.force_refresh=true;thingsos_board_unlock_refresh();
 }
@@ -156,7 +158,7 @@ static void pin_submit(void) {
         pin_clear_entry();app.pin.notice[0]=0;
         if(app.pin.purpose==PIN_UNLOCK) {
             app.pin.required=false;pin_clear_input();
-            navigate(THINGSOS_UI_LIBRARY);app.activity_at=now();app.force_refresh=true;
+            navigate(unlock_target());app.activity_at=now();app.force_refresh=true;
             thingsos_board_unlock_refresh();
 #ifndef THINGSOS_HOST_UI
             ble_resume_later();

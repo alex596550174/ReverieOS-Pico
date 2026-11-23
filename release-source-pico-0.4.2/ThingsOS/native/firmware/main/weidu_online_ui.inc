@@ -10,7 +10,7 @@ static void online_modal_begin(bool);
 static void online_modal_progress(void);
 static void online_close(void) {
     if(online.running)thingsos_weidu_cancel();
-    online.waiting=online.opening=false;
+    online.waiting=online.opening=online.previous_page=false;
     online.check_current_images=online.repairing_current_images=online.refresh_current_images=false;
     if(online.painted || online.error)app.dirty=true;
     online.cleanup|=online.painted;
@@ -52,7 +52,7 @@ static bool online_open(const thingsos_weidu_book_t* book) {
        weidu_open_path(book,path))return true;
     if(!thingsos_network_connected()){say("本章尚未加载，请先连接 WiFi；已加载章节仍可离线阅读");return false;}
     if(online.running && !online_covers(chapter,book->id))thingsos_weidu_cancel();
-    online.book=*book;online.target=chapter;online.opening=true;online.waiting=false;
+    online.book=*book;online.target=chapter;online.opening=true;online.waiting=online.previous_page=false;
     online.upgrading_images=online_window_ready(book->id,chapter,3,false);
     online.page=app.page;online.retry_at=0;online_modal_begin(true);return true;
 }
@@ -62,9 +62,13 @@ static void online_need(unsigned index) {
     if(!thingsos_network_connected()){say("本章尚未加载，请连接 WiFi 后重试；当前位置已保留");return;}
     free(online.note);online.note=NULL;online.cloud=false;
     if(online.running && !online_covers(index,online.book.id))thingsos_weidu_cancel();
-    online.target=index;online.waiting=true;online.opening=false;
+    online.target=index;online.waiting=true;online.opening=online.previous_page=false;
     online.book_id=app.runtime.location.book_id;online.page=app.page;online.retry_at=0;
     online_modal_begin(false);
+}
+static void online_previous_page(unsigned index) {
+    if (online.waiting && online.target == index && online.book_id == app.runtime.location.book_id)
+        online.previous_page = true;
 }
 static void online_loaded(unsigned index) {
     online.retry_at=0;
@@ -73,7 +77,7 @@ static void online_loaded(unsigned index) {
     if(index!=online.active_index)online.repairing_current_images=false;
     if((online.waiting || online.error) && index!=online.target) {
         online.cleanup|=online.painted;
-        online.waiting=online.error=false;online.painted=false;app.dirty=true;
+        online.waiting=online.error=online.previous_page=false;online.painted=false;app.dirty=true;
         free(online.note);online.note=NULL;online.cloud=false;
     }
 }
@@ -87,7 +91,8 @@ static bool online_note_target(const thingsos_wd_note_t* note) {
     if(!online.note){online.waiting=false;return false;}
     *online.note=*note;return true;
 }
-static void online_apply_position(bool cloud,uint32_t cloud_offset,const thingsos_wd_note_t* note) {
+static void online_apply_position(bool previous_page, bool cloud, uint32_t cloud_offset, const thingsos_wd_note_t* note) {
+    if (previous_page) chapter_seek_last_page();
     if(!cloud && !note)return;
     wd_prepare();size_t a,b;
     if(note && thingsos_wd_map_range(&app.wd_map,&app.chapter,note,&a,&b)) {
@@ -158,10 +163,15 @@ static void online_poll(void) {
         char complete[512];
         if(thingsos_weidu_device_cached(online.book.id,complete,sizeof(complete))) {
             thingsos_weidu_book_t book=online.book;bool opening=online.opening;unsigned index=online.target;
-            bool cloud=online.cloud;uint32_t offset=online.cloud_offset;thingsos_wd_note_t* note=online.note;online.note=NULL;
-            online.opening=online.waiting=false;
+            bool previous_page=online.previous_page,cloud=online.cloud;uint32_t offset=online.cloud_offset;
+            thingsos_wd_note_t* note=online.note;online.note=NULL;
+            online.opening=online.waiting=online.previous_page=false;
             if(!weidu_open_path(&book,complete) || (!opening && !load_chapter(index)))say("图书打开失败，缓存保留");
-            else if(!opening){online_apply_position(cloud,offset,note);app.runtime.location.byte_offset=(uint32_t)app.start;save_state();}
+            else if(!opening){
+                online_apply_position(previous_page,cloud,offset,note);
+                app.runtime.location.chapter=app.chapter_index;app.runtime.location.byte_offset=(uint32_t)app.start;
+                save_state();
+            }
             free(note);online.cloud=false;
             return;
         }
@@ -170,10 +180,15 @@ static void online_poll(void) {
        online_window_ready(online.book.id,online.target,3,false))) &&
        thingsos_weidu_stream_ready(ONLINE_ROOT,online.book.id,online.target)) {
         thingsos_weidu_book_t book=online.book;unsigned index=online.target;bool opening=online.opening;
-        bool cloud=online.cloud;uint32_t offset=online.cloud_offset;thingsos_wd_note_t* note=online.note;online.note=NULL;
-        online.opening=online.waiting=false;app.message[0]=0;
+        bool previous_page=online.previous_page,cloud=online.cloud;uint32_t offset=online.cloud_offset;
+        thingsos_wd_note_t* note=online.note;online.note=NULL;
+        online.opening=online.waiting=online.previous_page=false;app.message[0]=0;
         if(opening) {char path[640];thingsos_weidu_stream_path(ONLINE_ROOT,book.id,path,sizeof(path));if(!weidu_open_path(&book,path))say("章节打开失败，已加载内容保留");}
-        else if(load_chapter(index)) {online_apply_position(cloud,offset,note);app.menu=app.jump=false;app.runtime.location.chapter=index;app.runtime.location.byte_offset=(uint32_t)app.start;navigate(THINGSOS_UI_READING);save_state();}
+        else if(load_chapter(index)) {
+            online_apply_position(previous_page,cloud,offset,note);
+            app.menu=app.jump=false;app.runtime.location.chapter=index;app.runtime.location.byte_offset=(uint32_t)app.start;
+            navigate(THINGSOS_UI_READING);save_state();
+        }
         free(note);online.cloud=false;
         return;
     }

@@ -15,19 +15,6 @@ typedef struct {
 static uint32_t stats_date(const struct tm* day) {
     return (uint32_t)(day->tm_year+1900)*10000+(day->tm_mon+1)*100+day->tm_mday;
 }
-static uint64_t stats_day_duration(uint32_t date) {
-    for(size_t i=0;i<app.records.day_count;++i)
-        if(app.records.days[i].date==date)return app.records.days[i].milliseconds;
-    /* The aggregate ring retains 64 days. The existing per-book sidecar
-       recovers earlier daily totals without changing rollback storage format. */
-    uint64_t total=0;
-    for(size_t i=0;i<app.records.book_day_count;++i)
-        if(app.records.book_days[i].date==date) {
-            uint64_t value=app.records.book_days[i].milliseconds;
-            total=UINT64_MAX-total<value?UINT64_MAX:total+value;
-        }
-    return total;
-}
 static bool stats_calendar_build(time_t now,stats_calendar_t* calendar) {
     memset(calendar,0,sizeof(*calendar));
     struct tm today;
@@ -42,17 +29,13 @@ static bool stats_calendar_build(time_t now,stats_calendar_t* calendar) {
     uint32_t end=stats_date(&last);
     while(stats_date(&first)<=end && calendar->count<STATS_CALENDAR_DAYS) {
         unsigned i=calendar->count++;calendar->dates[i]=stats_date(&first);
-        calendar->duration[i]=calendar->dates[i]<=calendar->today?stats_day_duration(calendar->dates[i]):0;
+        calendar->duration[i]=calendar->dates[i]<=calendar->today?thingsos_records_day_duration(&app.records,calendar->dates[i]):0;
         if(calendar->duration[i])++calendar->active;
         first.tm_mday++;first.tm_isdst=-1;
         if(mktime(&first)==(time_t)-1)return false;
     }
     calendar->columns=(calendar->leading+calendar->count+6)/7;
     return calendar->count>0 && calendar->columns<=15;
-}
-static unsigned stats_heat_level(uint64_t ms) {
-    return !ms?0:ms<5ULL*60000?1:ms<10ULL*60000?2:ms<15ULL*60000?3:
-        ms<30ULL*60000?4:ms<45ULL*60000?5:ms<60ULL*60000?6:7;
 }
 static void stats_heatmap(time_t now) {
     stats_calendar_t calendar;
@@ -76,7 +59,7 @@ static void stats_heatmap(time_t now) {
             thingsos_rect(&app.canvas,x,y+STATS_HEAT_CELL-1,STATS_HEAT_CELL,1,204);
             thingsos_rect(&app.canvas,x,y,1,STATS_HEAT_CELL,204);
             thingsos_rect(&app.canvas,x+STATS_HEAT_CELL-1,y,1,STATS_HEAT_CELL,204);
-        } else thingsos_rect(&app.canvas,x,y,STATS_HEAT_CELL,STATS_HEAT_CELL,shades[stats_heat_level(calendar.duration[i])]);
+        } else thingsos_rect(&app.canvas,x,y,STATS_HEAT_CELL,STATS_HEAT_CELL,shades[thingsos_stats_heat_level(calendar.duration[i])]);
         if((!i && calendar.dates[i]%100<=24) || calendar.dates[i]%100==1) {
             snprintf(text,sizeof(text),"%u月",(unsigned)(calendar.dates[i]/100%100));
             label(text,x,376,20,90);
@@ -117,7 +100,7 @@ static bool stats_period_build(time_t time,unsigned period,stats_period_t* out) 
     out->first=stats_date(&first);out->last=stats_date(&last);out->dated=true;
     if(period==2)out->count=(unsigned)last.tm_mday;
     if(period==0) {
-        out->total=stats_day_duration(out->today);
+        out->total=thingsos_records_day_duration(&app.records,out->today);
         uint64_t known=0;
         if(app.records.hour_date==out->today)for(unsigned h=0;h<24;++h) {
             out->values[h]=app.records.hour_ms[h];known+=out->values[h];
@@ -128,7 +111,7 @@ static bool stats_period_build(time_t time,unsigned period,stats_period_t* out) 
             struct tm day=first;day.tm_mday+=(int)i;day.tm_isdst=-1;
             if(mktime(&day)==(time_t)-1)return false;
             uint32_t date=stats_date(&day);
-            if(date<=out->today)out->values[i]=stats_day_duration(date);
+            if(date<=out->today)out->values[i]=thingsos_records_day_duration(&app.records,date);
             out->total+=out->values[i];
         }
     }

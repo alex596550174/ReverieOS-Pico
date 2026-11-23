@@ -13,6 +13,81 @@ size_t thingsos_page_find(const thingsos_page_position_t* p, size_t n, uint32_t 
     }
     return lo ? lo-1 : 0;
 }
+static size_t indexed_history(const thingsos_page_position_t* pages, size_t before,
+                              unsigned chapter, size_t* history, size_t cap) {
+    size_t first = before;
+    while (first && before - first < cap && pages[first - 1].chapter == chapter) --first;
+    for (size_t i = first; i < before; ++i) history[i - first] = pages[i].offset;
+    return before - first;
+}
+
+static void reverse_history(size_t* history, size_t first, size_t past) {
+    while (past - first > 1) {
+        --past;
+        size_t saved = history[first];
+        history[first++] = history[past];
+        history[past] = saved;
+    }
+}
+
+bool thingsos_chapter_prev_page(
+    const thingsos_page_position_t* pages, size_t page_count,
+    unsigned indexed_chapters, size_t indexed_offset, unsigned chapter, size_t target_start,
+    thingsos_page_advance_fn advance, thingsos_page_yield_fn yield_fn, void* context,
+    size_t* out_prev, size_t* history, size_t history_cap, size_t* history_count) {
+    if (history_count) *history_count = 0;
+    if (!target_start || !out_prev) return false;
+    if (!history) history_cap = 0;
+    size_t offset = 0, used = 0;
+    if (pages && page_count && indexed_chapters >= chapter) {
+        bool covered = indexed_chapters > chapter || indexed_offset >= target_start;
+        size_t limit = covered ? target_start : indexed_offset;
+        size_t at = thingsos_page_find(pages, page_count, chapter,
+                                     limit > UINT32_MAX ? UINT32_MAX : (uint32_t)limit);
+        if (pages[at].chapter == chapter && pages[at].offset == target_start && at) --at;
+        if (pages[at].chapter == chapter && pages[at].offset < target_start && pages[at].offset <= limit) {
+            offset = pages[at].offset;
+            used = indexed_history(pages, at, chapter, history, history_cap);
+            if (covered) {
+                *out_prev = offset;
+                if (history_count) *history_count = used;
+                return true;
+            }
+        }
+    }
+    if (!advance) return false;
+    for (unsigned i = 0; i < 65536; ++i) {
+        size_t end = advance(context, offset);
+        if (end <= offset) return false;
+        if (end >= target_start) {
+            if (used > history_cap) {
+                /* Rotate the ring back into oldest-to-newest order for the caller. */
+                size_t first = used % history_cap;
+                reverse_history(history, 0, first);
+                reverse_history(history, first, history_cap);
+                reverse_history(history, 0, history_cap);
+                used = history_cap;
+            }
+            *out_prev = offset;
+            if (history_count) *history_count = used;
+            return true;
+        }
+        if (history_cap) history[used++ % history_cap] = offset;
+        offset = end;
+        if (yield_fn && (i + 1) % 4 == 0) yield_fn(context);
+    }
+    return false;
+}
+
+uint64_t thingsos_page_layout_key(unsigned version, unsigned px, unsigned line, unsigned margin,
+                                 unsigned indent, unsigned width, unsigned height) {
+    const unsigned layout[] = {version, px, line, margin, indent, width, height};
+    const unsigned char* bytes = (const unsigned char*)layout;
+    uint64_t key = 14695981039346656037ULL;
+    for (size_t i = 0; i < sizeof(layout); ++i) key = (key ^ bytes[i]) * 1099511628211ULL;
+    return key;
+}
+
 unsigned thingsos_book_percent(size_t page, size_t count) {
     if(count<=1) return 0;
     if(page>=count-1) return 100;

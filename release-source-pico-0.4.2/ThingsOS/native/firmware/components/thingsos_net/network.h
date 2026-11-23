@@ -27,6 +27,7 @@ typedef struct {
 } thingsos_wifi_result_t;
 esp_err_t thingsos_network_scan_start(void);
 esp_err_t thingsos_network_scan_poll(thingsos_wifi_result_t*,size_t,size_t*,bool* done);
+bool thingsos_network_wifi_enabled(void);
 bool thingsos_network_connected(void);
 void thingsos_network_address(bool hotspot,char* out,size_t capacity);
 esp_err_t thingsos_network_mode(bool hotspot);

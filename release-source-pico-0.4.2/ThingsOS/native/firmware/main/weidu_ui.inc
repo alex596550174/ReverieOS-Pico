@@ -134,8 +134,9 @@ static void weidu_cover(const thingsos_weidu_book_t* source,book_t* model,int x,
         app.shelf_cover_w=right-app.shelf_cover_x;app.shelf_cover_h=bottom-app.shelf_cover_y;
     }
     char path[640];snprintf(path,sizeof(path),"/sdcard/.thingsos/weidu/covers/%s.jpg",source->id);
-    cover_from(model,x,y,w,h,path);
-    if(model->epub)cached_mark(x,y,w,h);
+    thingsos_rect_t drawn;
+    cover_from_rect(model,x,y,w,h,path,&drawn);
+    if(!model->epub)uncached_mark(drawn.x,drawn.y,drawn.width,drawn.height);
 }
 static void weidu_enter(void) {
     bool article_return=app.page==THINGSOS_UI_READING && app.reader_from_weidu && app.mp_mode==2;
@@ -264,6 +265,12 @@ static void weidu_poll(void) {
     if(next.background && next.busy)redraw=false;
     if (redraw) {app.weidu_progress_refresh=progress_only;app.dirty = true;}
 }
+static bool weidu_back_visible(void) {
+    return !app.mp_mode && !app.weidu_detail && !app.weidu_logout_confirm &&
+        !(app.weidu.busy && !app.weidu.background) && !app.wd_notes_open &&
+        !app.wd_sync_panel && !app.wd_long_open && !app.wd_consent && !app.weidu_query[0] &&
+        !app.wd_thought_open && !app.wd_cloud_prompt && !app.wd_rt_panel;
+}
 static bool weidu_draw(void) {
     if (app.page != THINGSOS_UI_WEIDU) return false;
     header("微读");
@@ -318,7 +325,7 @@ static bool weidu_draw(void) {
     if(app.mp_mode)return mp_draw();
     if (app.weidu_detail && app.weidu_selected < app.weidu_count) {
         thingsos_weidu_book_t* book = &app.weidu_books[app.weidu_selected];
-        weidu_button(app.weidu_detail_return==THINGSOS_UI_LIBRARY?"返回书库":app.weidu_detail_return==THINGSOS_UI_RECENT?"返回最近":app.weidu_query[0]?"返回搜索":"返回书架", 36, 245, 612);
+        weidu_button(app.weidu_detail_return==THINGSOS_UI_LIBRARY?"返回书库":app.weidu_detail_return==THINGSOS_UI_RECENT?"返回最近":app.weidu_detail_return==THINGSOS_UI_HOME?"返回首页":app.weidu_query[0]?"返回搜索":"返回书架", 36, 245, 612);
         label(book->title, 36, 405, 36, 612);
         label(book->author, 36, 470, 27, 612);
         char cached[512];

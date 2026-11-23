@@ -97,9 +97,9 @@ void thingsos_draw_reader_menu(thingsos_font_t* f, thingsos_canvas_t* c,
                 else choice(f,c,options[row][col],x,y,128,selected==col);
             }
         }
-        choice(f,c,"目录",24,488,376,false);choice(f,c,"书签",420,488,376,false);choice(f,c,"跳转",816,488,376,false);
-        if(style.weidu){choice(f,c,"字体",24,586,376,false);choice(f,c,"划线",420,586,376,false);choice(f,c,"更多",816,586,376,false);}
-        else {choice(f,c,"字体",24,586,574,false);choice(f,c,"更多",618,586,574,false);}
+        choice(f,c,"目录",24,488,376,false);choice(f,c,"添加书签",420,488,376,false);choice(f,c,"书签",816,488,376,false);
+        if(style.weidu){choice(f,c,"跳转",24,586,376,false);choice(f,c,"划线",420,586,376,false);choice(f,c,"更多",816,586,376,false);}
+        else {choice(f,c,"跳转",24,586,574,false);choice(f,c,"更多",618,586,574,false);}
         return;
     }
     /* Soften the reading page above the sheet without an extra panel refresh. */
@@ -131,10 +131,10 @@ void thingsos_draw_reader_menu(thingsos_font_t* f, thingsos_canvas_t* c,
         }
         thingsos_rect(c,36,y+74,612,1,204);
     }
-    choice(f,c,"目录",36,1044,194,false); choice(f,c,"书签",245,1044,194,false);
-    choice(f,c,"跳转",454,1044,194,false);
-    if(style.weidu){choice(f,c,"字体",36,1132,194,false);choice(f,c,"划线",245,1132,194,false);choice(f,c,"更多",454,1132,194,false);}
-    else {choice(f,c,"字体",36,1132,292,false);choice(f,c,"更多",356,1132,292,false);}
+    choice(f,c,"目录",36,1044,194,false); choice(f,c,"添加书签",245,1044,194,false);
+    choice(f,c,"书签",454,1044,194,false);
+    if(style.weidu){choice(f,c,"跳转",36,1132,194,false);choice(f,c,"划线",245,1132,194,false);choice(f,c,"更多",454,1132,194,false);}
+    else {choice(f,c,"跳转",36,1132,292,false);choice(f,c,"更多",356,1132,292,false);}
 }
 thingsos_menu_action_t thingsos_reader_menu_hit(int x,int y,unsigned* value) {
     if(x<0||x>=684||y<0||y>=1216) return THINGSOS_MENU_NONE;
@@ -152,11 +152,11 @@ thingsos_menu_action_t thingsos_reader_menu_hit(int x,int y,unsigned* value) {
     }
     if(y>=1044 && y<1112) {
         if(x>=36&&x<230) return THINGSOS_MENU_CHAPTERS;
-        if(x>=245&&x<439) return THINGSOS_MENU_BOOKMARKS;
-        if(x>=454&&x<648) return THINGSOS_MENU_JUMP;
+        if(x>=245&&x<439) return THINGSOS_MENU_ADD_BOOKMARK;
+        if(x>=454&&x<648) return THINGSOS_MENU_BOOKMARKS;
     }
     if(y>=1132) {
-        if(x>=36&&x<328) return THINGSOS_MENU_FONTS;
+        if(x>=36&&x<328) return THINGSOS_MENU_JUMP;
         if(x>=356&&x<648) return THINGSOS_MENU_MORE;
     }
     return THINGSOS_MENU_NONE;
@@ -164,7 +164,7 @@ thingsos_menu_action_t thingsos_reader_menu_hit(int x,int y,unsigned* value) {
 
 thingsos_menu_action_t thingsos_reader_menu_hit_weidu(int x,int y,unsigned* value){
     if(x<0 || x>=684 || y<0 || y>=1216)return THINGSOS_MENU_NONE;
-    if(y>=1132){if(x>=36&&x<230)return THINGSOS_MENU_FONTS;if(x>=245&&x<439)return THINGSOS_MENU_NOTES;if(x>=454&&x<648)return THINGSOS_MENU_MORE;return THINGSOS_MENU_NONE;}
+    if(y>=1132){if(x>=36&&x<230)return THINGSOS_MENU_JUMP;if(x>=245&&x<439)return THINGSOS_MENU_NOTES;if(x>=454&&x<648)return THINGSOS_MENU_MORE;return THINGSOS_MENU_NONE;}
     return thingsos_reader_menu_hit(x,y,value);
 }
 thingsos_menu_action_t thingsos_reader_menu_hit_landscape(int x,int y,unsigned* value,bool weidu) {
@@ -185,16 +185,16 @@ thingsos_menu_action_t thingsos_reader_menu_hit_landscape(int x,int y,unsigned* 
     }
     if(y>=488 && y<556) {
         if(x>=24 && x<400)return THINGSOS_MENU_CHAPTERS;
-        if(x>=420 && x<796)return THINGSOS_MENU_BOOKMARKS;
-        if(x>=816 && x<1192)return THINGSOS_MENU_JUMP;
+        if(x>=420 && x<796)return THINGSOS_MENU_ADD_BOOKMARK;
+        if(x>=816 && x<1192)return THINGSOS_MENU_BOOKMARKS;
     }
     if(y>=586) {
         if(weidu) {
-            if(x>=24 && x<400)return THINGSOS_MENU_FONTS;
+            if(x>=24 && x<400)return THINGSOS_MENU_JUMP;
             if(x>=420 && x<796)return THINGSOS_MENU_NOTES;
             if(x>=816 && x<1192)return THINGSOS_MENU_MORE;
         }else {
-            if(x>=24 && x<598)return THINGSOS_MENU_FONTS;
+            if(x>=24 && x<598)return THINGSOS_MENU_JUMP;
             if(x>=618 && x<1192)return THINGSOS_MENU_MORE;
         }
     }

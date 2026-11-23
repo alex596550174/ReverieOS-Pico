@@ -1146,8 +1146,9 @@ esp_err_t thingsos_enter_rescue(void) {
     if (e == ESP_OK) xTaskCreate(reboot_task, "rescue_boot", 2048, NULL, 5, NULL);
     return e;
 }
+bool thingsos_network_wifi_enabled(void) {return !user_disconnected;}
 bool thingsos_network_connected(void) {
-    if(user_disconnected)return false;
+    if(!thingsos_network_wifi_enabled())return false;
     wifi_ap_record_t record;
     esp_netif_t* sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     esp_netif_ip_info_t info;
