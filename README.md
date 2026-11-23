@@ -12,7 +12,7 @@ ReverieOS 是我为个人学习和练习维护的 Read Pico（RDP-G01-W）固件
 
 ## 源码与上游资料
 
-本分支关注 Read Pico（ESP32-S3）。Read Pico 源码位于 [0.4.2 发布快照](release-source-pico-0.4.2/)，构建入口在该快照的 `ThingsOS/native/`。仓库顶层 `native/` 对应上游的 Metalio E-Ink4-Plus（ESP32-S31）工程。
+本分支关注 Read Pico（ESP32-S3）。Read Pico 源码位于 [0.4.2 发布快照](release-source-pico-0.4.2/)，构建入口在该快照的 `ThingsOS/native/`。`pico` 是本仓库的 Read Pico 分支。`upstream-mirror` 保留完整的上游源码，供后续同步和比对。
 
 原项目说明、安装向导和固件发布请查看 [ThingsOS 上游仓库](https://github.com/flowflic/ThingsOS) 与 [上游发布网站](https://thingsos.scholarcn.com)。
 
