@@ -4,7 +4,7 @@ ReverieOS 是我为个人学习和练习维护的 Read Pico（RDP-G01-W）固件
 
 感谢 ThingsOS 作者和贡献者公开源码，也感谢 MindReset 和各第三方项目的贡献。ReverieOS 是个人 fork，与上游的官方发布各自独立。
 
-## 学习内容
+## 修改内容
 
 - 阅读首页、书库导航、菜单和状态栏。
 - EPUB 章节和翻页行为，以及中文排版与分页。
