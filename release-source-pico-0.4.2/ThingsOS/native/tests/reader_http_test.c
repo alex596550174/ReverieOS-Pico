@@ -6,7 +6,9 @@
 #include <string.h>
 #include <stdlib.h>
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"HTTP test line %d: %s\n",__LINE__,#x);exit(1);}}while(0)
+#ifndef __APPLE__
 static size_t strlcpy(char* dst,const char* src,size_t cap){size_t n=strlen(src);if(cap){size_t take=n<cap-1?n:cap-1;memcpy(dst,src,take);dst[take]=0;}return n;}
+#endif
 static struct {char reader_pc[128],reader_token[128];} workspace,*work=&workspace;
 static bool reading_context_active;
 #include "../firmware/components/thingsos_weidu/reader_http_body.inc"

@@ -41,7 +41,7 @@ static void centered(thingsos_font_t* f, thingsos_canvas_t* c, const char* s,
     thingsos_label_centered(f,c,s,x,y,w);
 }
 void thingsos_draw_nav(thingsos_font_t* f, thingsos_canvas_t* c, unsigned active) {
-    static const char* names[] = {"书库","微读","应用","设置"};
+    static const char* names[] = {"首页","微读","应用","设置"};
     thingsos_rect(c,0,1098,684,1,188);
     for (unsigned i=0;i<4;++i) {
         unsigned item=i;

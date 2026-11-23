@@ -179,10 +179,7 @@ static void pico_controls_draw(void) {
                    width/2-125,50,21,250);
     snprintf(text,sizeof(text),"%u%%",app.battery);
     thingsos_font_size(ui_font(),23);
-    thingsos_label_right(ui_font(),&app.canvas,text,width-210,50,116);
-    control_round(width-76,32,39,20,0,2,34,255);
-    thingsos_rect(&app.canvas,width-72,36,(int)(31*app.battery/100),12,34);
-    thingsos_rect(&app.canvas,width-36,38,3,8,34);
+    draw_right_ink(text, width - 30, 50, 116);
     label("控制中心",36,139,37,width-150);
     control_round(width-102,90,66,66,33,2,187,255);
     control_glyph(control_up,29,width-83,109,34);

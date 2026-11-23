@@ -1,4 +1,4 @@
-# ThingsOS on Metalio E-Ink4-Plus — repository exclusions.
+# ReverieOS Read Pico repository exclusions.
 # Build outputs, vendor reference trees and per-machine state stay local.
 
 # Private reference checkouts and vendor snapshots (read-only inputs, not shipped)

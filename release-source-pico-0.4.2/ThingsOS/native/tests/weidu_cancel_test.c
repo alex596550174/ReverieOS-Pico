@@ -25,7 +25,9 @@ static int terminal,thingsos_io_lock=1;
 static unsigned ready_call;
 static void* ready_transfer;
 static uint64_t now_ms(void* context){(void)context;return clock_ms;}
+#ifndef __APPLE__
 static size_t strlcpy(char* out,const char* in,size_t cap){size_t n=strlen(in);if(cap){size_t k=n<cap-1?n:cap-1;memcpy(out,in,k);out[k]=0;}return n;}
+#endif
 static struct {char reader_pc[128],reader_token[128];} workspace,*work=&workspace;
 static bool reading_context_active;
 #include "../firmware/components/thingsos_weidu/reader_http_body.inc"

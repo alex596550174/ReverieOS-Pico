@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 /* Main-task-owned screen lock. The host executes this same controller/storage
-   path; Windows CNG supplies PBKDF2 instead of the device's PSA implementation. */
+   path with the platform PBKDF2 provider in place of the device's PSA API. */
 #ifdef THINGSOS_HOST_UI
+#ifdef _WIN32
 #include <bcrypt.h>
+#else
+#include <CommonCrypto/CommonCryptoError.h>
+#include <CommonCrypto/CommonKeyDerivation.h>
+#include <Security/SecRandom.h>
+#endif
 static bool host_pin_crypto_fail,host_pin_random_fail;
 #else
 #include "psa/crypto.h"
@@ -26,12 +32,17 @@ static bool pin_derive(const char* pin,const uint8_t salt[16],uint8_t out[32]) {
     if(!pin_digits(pin))return false;
 #ifdef THINGSOS_HOST_UI
     if(host_pin_crypto_fail)return false;
+#ifdef _WIN32
     BCRYPT_ALG_HANDLE algorithm=NULL;
     bool ok=BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,NULL,BCRYPT_ALG_HANDLE_HMAC_FLAG)>=0;
     if(ok)ok=BCryptDeriveKeyPBKDF2(algorithm,(PUCHAR)pin,LOCK_PIN_DIGITS,(PUCHAR)salt,16,
         LOCK_PIN_ITERATIONS,out,32,0)>=0;
     if(algorithm)BCryptCloseAlgorithmProvider(algorithm,0);
     return ok;
+#else
+    return CCKeyDerivationPBKDF(kCCPBKDF2,pin,LOCK_PIN_DIGITS,salt,16,kCCPRFHmacAlgSHA256,
+        LOCK_PIN_ITERATIONS,out,32)==kCCSuccess;
+#endif
 #else
     if(psa_crypto_init()!=PSA_SUCCESS)return false;
     psa_key_derivation_operation_t operation=PSA_KEY_DERIVATION_OPERATION_INIT;
@@ -46,7 +57,11 @@ static bool pin_derive(const char* pin,const uint8_t salt[16],uint8_t out[32]) {
 }
 static bool pin_random(uint8_t salt[16]) {
 #ifdef THINGSOS_HOST_UI
+#ifdef _WIN32
     return !host_pin_random_fail && BCryptGenRandom(NULL,salt,16,BCRYPT_USE_SYSTEM_PREFERRED_RNG)>=0;
+#else
+    return !host_pin_random_fail && SecRandomCopyBytes(kSecRandomDefault,16,salt)==errSecSuccess;
+#endif
 #else
     return psa_crypto_init()==PSA_SUCCESS && psa_generate_random(salt,16)==PSA_SUCCESS;
 #endif

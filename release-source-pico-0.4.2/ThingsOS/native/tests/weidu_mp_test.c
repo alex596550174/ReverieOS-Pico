@@ -4,11 +4,11 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <direct.h>
+#include "host_files.h"
 /* The article directory is asserted below; a silent creation failure must fail
    the test instead of only surfacing as a missing file. */
 static void make_dir(const char* path){
-    if(_mkdir(path) && errno!=EEXIST){fprintf(stderr,"MP test: cannot create %s\n",path);exit(1);}
+    if(host_mkdir(path) && errno!=EEXIST){fprintf(stderr,"MP test: cannot create %s\n",path);exit(1);}
 }
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"MP test %d: %s\n",__LINE__,#x);exit(1);}}while(0)
 static unsigned mode,renewals,content_calls,image_calls;

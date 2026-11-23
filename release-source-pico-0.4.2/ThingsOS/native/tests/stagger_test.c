@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "e0470_epaper_waveform.h"
+#include "thingsos/refresh_mask.h"
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"stagger:%d: %s\n",__LINE__,#x);exit(1);}}while(0)
 #define THINGSOS_STAGGER_HOST
 #define THINGSOS_PANEL_BYTES (1216u*684u/2)

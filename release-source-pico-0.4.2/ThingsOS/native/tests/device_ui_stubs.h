@@ -8,10 +8,17 @@
 #include <string.h>
 #include <time.h>
 #include <sys/stat.h>
-#include <direct.h>
+#include "host_files.h"
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#else
+#include <strings.h>
+#include <sys/time.h>
+#include "device_ui_macos.h"
+#define _strdup strdup
+#endif
 #include "thingsos/graphics.h"
 #include "thingsos/tilt.h"
 #include "thingsos/network_state.h"
@@ -97,13 +104,16 @@ struct dirent {char d_name[256];};
 static DIR* opendir(const char* p) {(void)p;return NULL;}
 static struct dirent* readdir(DIR* d) {(void)d;return NULL;}
 static void closedir(DIR* d) {(void)d;}
+#ifdef _WIN32
 #define strcasecmp _stricmp
 #define S_ISREG(m) (((m)&_S_IFMT)==_S_IFREG)
-#define mkdir(p,m) _mkdir(p)
+#define mkdir(p,m) host_mkdir(p)
 static size_t strlcpy(char* dst,const char* src,size_t n) {size_t len=strlen(src);if(n) {size_t used=len<n-1?len:n-1;memcpy(dst,src,used);dst[used]=0;}return len;}
 struct timeval {time_t tv_sec;int tv_usec;};
-static int settimeofday(const struct timeval* v,void* p) {(void)v;(void)p;return 0;}
 static struct tm* localtime_r(const time_t* t,struct tm* out) {return localtime_s(out,t)?NULL:out;}
+#endif
+static int host_settimeofday(const struct timeval* v,void* p) {(void)v;(void)p;return 0;}
+#define settimeofday host_settimeofday
 typedef int esp_err_t;
 typedef struct {char version[32];} esp_app_desc_t;
 static const esp_app_desc_t* esp_app_get_description(void){static esp_app_desc_t a={"0.3.2"};return &a;}
@@ -288,11 +298,11 @@ static int thingsos_board_present_reader_stagger(const thingsos_canvas_t* c,bool
     (void)c;(void)forward;return 0;
 }
 
-static bool thingsos_network_job(thingsos_manage_job_t* p) {(void)p;return false;}
-static void thingsos_network_job_done(unsigned a,unsigned b,unsigned c) {(void)a;(void)b;(void)c;}
+bool thingsos_network_job(thingsos_manage_job_t* p) {(void)p;return false;}
+void thingsos_network_job_done(unsigned a,unsigned b,unsigned c) {(void)a;(void)b;(void)c;}
 static thingsos_transfer_state_t host_transfer;
-static void thingsos_network_transfer(thingsos_transfer_state_t* s) {*s=host_transfer;}
-static const char* thingsos_network_failure(void) {return "";}
+void thingsos_network_transfer(thingsos_transfer_state_t* s) {*s=host_transfer;}
+const char* thingsos_network_failure(void) {return "";}
 
 static const char* thingsos_board_charge(void) {return "未充电";}
 static unsigned host_battery_percent=100,host_power_samples;
@@ -303,15 +313,15 @@ static bool thingsos_board_power_status(unsigned* percent,bool* connected) {
     *percent=host_battery_percent;*connected=host_charge_connected;return true;
 }
 
-static void thingsos_network_maintenance(void) {}
+void thingsos_network_maintenance(void) {}
 static char host_saved_wifi[33];
-static const char* thingsos_network_saved_name(void) {return host_saved_wifi;}
+const char* thingsos_network_saved_name(void) {return host_saved_wifi;}
 
-static bool thingsos_network_recover_files(void) {return true;}
+bool thingsos_network_recover_files(void) {return true;}
 
-static bool thingsos_network_pause_requested(void) {return false;}
-static void thingsos_network_pause_complete(bool ok) {(void)ok;}
-static void thingsos_network_card(uint64_t id) {(void)id;}
+bool thingsos_network_pause_requested(void) {return false;}
+void thingsos_network_pause_complete(bool ok) {(void)ok;}
+void thingsos_network_card(uint64_t id) {(void)id;}
 
 static unsigned host_weidu_cover_calls;
 static void thingsos_weidu_device_covers(const thingsos_weidu_book_t* books,size_t count) {(void)books;(void)count;++host_weidu_cover_calls;}

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "thingsos/weidu_reading.h"
-#include <direct.h>
+#include "host_files.h"
 #include <stdlib.h>
 #include <string.h>
 #include "cJSON.h"
@@ -322,7 +322,7 @@ static int audit_inline_notes(const char* root,const char* id,const char* output
 extern bool thingsos_weidu_pack(const char*,const thingsos_weidu_book_t*,const char*,const char*,unsigned);
 static void navigation_test(const char* root) {
     char dir[700],toc[740],raw[740],file[740],cache[740];
-    snprintf(dir,sizeof(dir),"%s/book-9901",root);_mkdir(dir);
+    snprintf(dir,sizeof(dir),"%s/book-9901",root);host_mkdir(dir);
     snprintf(toc,sizeof(toc),"%s/toc.dat",dir);snprintf(raw,sizeof(raw),"%s/chapter-0.raw",dir);
     snprintf(cache,sizeof(cache),"%s/navigation.cache",dir);remove(cache);
     snprintf(file,sizeof(file),"%s/微读-9901.epub",root);
@@ -407,10 +407,10 @@ int main(int argc, char** argv) {
     CHECK(!thingsos_wd_key_header(key_json,strlen(key_json),key_header,12) && !key_header[0]);
     char root[640], dir[700], tocpath[750], rawpath[750], epubpath[750];
     snprintf(root, sizeof(root), "%s/reading-tests", argv[1]);
-    _mkdir(root);navigation_test(root);
-    _mkdir(root);
+    host_mkdir(root);navigation_test(root);
+    host_mkdir(root);
     snprintf(dir, sizeof(dir), "%s/book-55", root);
-    _mkdir(dir);
+    host_mkdir(dir);
     thingsos_weidu_client_t* c = calloc(1, sizeof(*c));
     CHECK(c);
     strcpy(c->root, root);
@@ -522,12 +522,19 @@ int main(int argc, char** argv) {
         strlen(note->text) == 4095);
     char blocked[768];
     snprintf(blocked, sizeof(blocked), "%s/notes.manifest.part", dir);
+    char marker[800];
+    CHECK(snprintf(marker, sizeof(marker), "%s/blocker", blocked) < (int)sizeof(marker));
+    remove(marker);
+    host_rmdir(blocked);
     remove(blocked);
-    _mkdir(blocked);
+    CHECK(!host_mkdir(blocked));
+    /* POSIX remove() can delete an empty directory before opening the file. */
+    text_file(marker, "keep the fixture directory nonempty");
     mode = 0;
     CHECK(thingsos_wd_notes_refresh(c, "55") == WD_STORAGE);
     CHECK(thingsos_wd_note(root, &c->session, "55", 0, 0, note) && note->truncated);
-    CHECK(!_rmdir(blocked));
+    CHECK(!remove(marker));
+    CHECK(!host_rmdir(blocked));
     mode = 7;
     CHECK(thingsos_wd_notes_refresh(c, "55") == WD_PROTOCOL);
     CHECK(thingsos_wd_note(root, &c->session, "55", 0, 0, note) && note->truncated);

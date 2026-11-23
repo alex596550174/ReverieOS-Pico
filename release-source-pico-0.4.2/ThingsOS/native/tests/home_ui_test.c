@@ -76,11 +76,11 @@ static bool check_stats(void) {
 
 static bool check_hits(void) {
     const struct { int first, past; thingsos_home_action_t action; } rows[] = {
-        {120,388,THINGSOS_HOME_CONTINUE},{388,408,THINGSOS_HOME_NONE},
-        {408,656,THINGSOS_HOME_STATS},{656,678,THINGSOS_HOME_NONE},
-        {678,782,THINGSOS_HOME_RECENT_0},{782,886,THINGSOS_HOME_RECENT_1},
-        {886,990,THINGSOS_HOME_RECENT_2},{990,1063,THINGSOS_HOME_LOCAL},
-        {1063,1098,THINGSOS_HOME_NONE},
+        {110,404,THINGSOS_HOME_CONTINUE},{404,424,THINGSOS_HOME_NONE},
+        {424,672,THINGSOS_HOME_STATS},{672,692,THINGSOS_HOME_NONE},
+        {692,796,THINGSOS_HOME_RECENT_0},{796,900,THINGSOS_HOME_RECENT_1},
+        {900,1004,THINGSOS_HOME_RECENT_2},{1004,1077,THINGSOS_HOME_LOCAL},
+        {1077,1098,THINGSOS_HOME_NONE},
     };
     for (size_t i = 0; i < sizeof(rows)/sizeof(rows[0]); ++i) {
         CHECK(thingsos_home_hit(30,rows[i].first) == rows[i].action);
@@ -88,18 +88,18 @@ static bool check_hits(void) {
         CHECK(thingsos_home_hit(29,rows[i].first) == THINGSOS_HOME_NONE);
         CHECK(thingsos_home_hit(654,rows[i].past-1) == THINGSOS_HOME_NONE);
     }
-    CHECK(thingsos_home_hit(653,387) == THINGSOS_HOME_CONTINUE);
-    CHECK(thingsos_home_book_index(thingsos_home_hit(653,387)) == 0);
+    CHECK(thingsos_home_hit(653,403) == THINGSOS_HOME_CONTINUE);
+    CHECK(thingsos_home_book_index(thingsos_home_hit(653,403)) == 0);
     CHECK(thingsos_home_book_index(thingsos_home_hit(50,700)) == 1);
     CHECK(thingsos_home_book_index(thingsos_home_hit(50,800)) == 2);
-    CHECK(thingsos_home_book_index(thingsos_home_hit(50,900)) == 3);
+    CHECK(thingsos_home_book_index(thingsos_home_hit(50,920)) == 3);
     CHECK(thingsos_home_book_index(THINGSOS_HOME_LOCAL) == THINGSOS_HOME_BOOK_LIMIT);
-    for (int y = 990; y < 1063; ++y) {
+    for (int y = 1004; y < 1077; ++y) {
         CHECK(thingsos_home_hit(342,y) == THINGSOS_HOME_NONE);
         CHECK(thingsos_home_hit(343,y) == THINGSOS_HOME_WEIDU);
         CHECK(thingsos_home_hit(653,y) == THINGSOS_HOME_WEIDU);
     }
-    CHECK(thingsos_home_hit(30,119) == THINGSOS_HOME_NONE);
+    CHECK(thingsos_home_hit(30,109) == THINGSOS_HOME_NONE);
     CHECK(thingsos_home_hit(-1,120) == THINGSOS_HOME_NONE && thingsos_home_hit(WIDTH,120) == THINGSOS_HOME_NONE);
     CHECK(thingsos_home_hit(50,-1) == THINGSOS_HOME_NONE && thingsos_home_hit(50,HEIGHT) == THINGSOS_HOME_NONE);
     return true;
@@ -172,28 +172,29 @@ static bool check_drawing(thingsos_font_t* font, const char* output) {
     thingsos_home_draw(font,&canvas,&stats,books,sizeof(books)/sizeof(books[0]),true,sample_cover,font);
     /* Cover stripes encode the input index so a repeated or shifted row is detectable. */
     CHECK(pixel(55,218) == 140);
-    CHECK(pixel(55,716) == 151 && pixel(55,820) == 162 && pixel(55,924) == 173);
+    CHECK(pixel(55,730) == 151 && pixel(55,834) == 162 && pixel(55,938) == 173);
     CHECK(!font->errors);
-    const int edges[][2] = {{120,388},{408,656},{678,1063}};
-    for (size_t i = 0; i < 3; ++i) {
-        CHECK(shade_box(30,edges[i][0],624,1,136) && shade_box(30,edges[i][1]-1,624,1,136));
-        CHECK(shade_box(30,edges[i][0],1,edges[i][1]-edges[i][0],136));
-        CHECK(shade_box(653,edges[i][0],1,edges[i][1]-edges[i][0],136));
-    }
-    CHECK(shade_box(236,354,145,10,0) && shade_box(381,354,249,10,220));
-    CHECK(shade_box(342,1004,1,45,210));
+    CHECK(shade_box(30,110,1,967,255) && shade_box(653,110,1,967,255));
+    CHECK(ink_edge(274,100,318,50,true) == 110);
+    CHECK(shade_box(54,110,194,1,234) && shade_box(54,386,194,1,234));
+    CHECK(shade_box(274,379,131,8,0) && shade_box(405,379,225,8,220));
+    CHECK(shade_box(342,1018,1,45,210));
     const int entry_regions[][2] = {{54,110},{366,422},{306,325},{612,631}};
     for (size_t i = 0; i < sizeof(entry_regions)/sizeof(entry_regions[0]); ++i) {
         unsigned char minimum = 255;
-        for (int y = 1000; y < 1055; ++y)
+        for (int y = 1014; y < 1069; ++y)
             for (int x = entry_regions[i][0]; x < entry_regions[i][1]; ++x)
                 if (pixel(x,y) < minimum) minimum = pixel(x,y);
         CHECK(minimum >= 85 && minimum < 118);
     }
-    CHECK(shade_box(30,388,624,20,255) && shade_box(30,656,624,22,255) && shade_box(30,1063,624,35,255));
+    for (int y = 404; y < 424; ++y)
+        CHECK(shade_box(36,y,612,1,y == 414 ? 170 : 255));
+    for (int y = 672; y < 692; ++y)
+        CHECK(shade_box(36,y,612,1,y == 682 ? 170 : 255));
+    CHECK(shade_box(30,1077,624,21,255));
     bool used[8] = {0};
     for (unsigned i = 0; i < THINGSOS_HOME_DAYS; ++i) {
-        int x = 311+(int)(i/7)*27, y = 454+(int)(i%7)*27;
+        int x = 311+(int)(i/7)*27, y = 470+(int)(i%7)*27;
         if (stats.grid_future[i]) {
             CHECK(shade_box(x,y,22,1,204) && shade_box(x,y+21,22,1,204));
             CHECK(shade_box(x,y,1,22,204) && shade_box(x+21,y,1,22,204));
@@ -208,7 +209,7 @@ static bool check_drawing(thingsos_font_t* font, const char* output) {
     struct { int top, bottom; } lines[6];
     unsigned line_count = 0;
     bool previous_ink = false;
-    for (int y = 416; y < 646; ++y) {
+    for (int y = 432; y < 662; ++y) {
         bool ink = ink_edge(54,y,216,1,true) >= 0;
         if (ink && !previous_ink) {
             CHECK(line_count < sizeof(lines)/sizeof(lines[0]));
@@ -227,33 +228,33 @@ static bool check_drawing(thingsos_font_t* font, const char* output) {
     }
     printf("Stats spacing: %d/%d/%d px within groups, %d/%d px between groups\n",
         inside_gaps[0],inside_gaps[1],inside_gaps[2],between_gaps[0],between_gaps[1]);
-    int today_top = lines[0].top, arrow_top = ink_edge(608,416,24,36,true);
+    int today_top = lines[0].top, arrow_top = ink_edge(608,432,24,36,true);
     int month_bottom = lines[5].bottom;
-    int grid_bottom = ink_edge(311,454,319,184,false);
+    int grid_bottom = ink_edge(311,470,319,184,false);
     CHECK(today_top >= 0 && arrow_top >= 0 && abs(today_top-arrow_top) <= 2);
-    CHECK(month_bottom >= 0 && abs(month_bottom-638) <= 2);
-    CHECK(grid_bottom == 637 && abs(month_bottom-grid_bottom) <= 2);
-    printf("今日阅读 y=%d, arrow y=%d, top delta %d px; month y=%d, grid last y=%d, bottom delta %d px (vs y=638: %d px)\n",
-        today_top,arrow_top,abs(today_top-arrow_top),month_bottom,grid_bottom,abs(month_bottom-grid_bottom),abs(month_bottom-638));
+    CHECK(month_bottom >= 0 && abs(month_bottom-654) <= 2);
+    CHECK(grid_bottom == 653 && abs(month_bottom-grid_bottom) <= 2);
+    printf("今日阅读 y=%d, arrow y=%d, top delta %d px; month y=%d, grid last y=%d, bottom delta %d px (vs y=654: %d px)\n",
+        today_top,arrow_top,abs(today_top-arrow_top),month_bottom,grid_bottom,abs(month_bottom-grid_bottom),abs(month_bottom-654));
     thingsos_draw_nav(font,&canvas,0);
     CHECK(write_preview(output,"home-preview-full.pgm"));
 
     thingsos_home_book_t long_book = {"一本书名很长的书一本书名很长的书一本书名很长的书一本书名很长的书", "", "TXT", 0, 0, 37, true};
     memset(pixels,255,sizeof(pixels));
     thingsos_home_draw(font,&canvas,&stats,&long_book,1,true,sample_cover,font);
-    CHECK(ink_edge(236,147,356,49,true)>=0 && shade_box(596,147,18,49,255));
-    CHECK(shade_box(596,690,18,48,255));
-    CHECK(shade_box(450,311,180,35,255));
-    CHECK(ink_edge(236,257,394,30,true)>=0 && shade_box(320,257,310,30,255));
-    CHECK(shade_box(54,692,56,76,255) && shade_box(128,748,464,24,255));
-    CHECK(ink_edge(54,805,576,65,true)>=0 && shade_box(128,886,464,100,255));
+    CHECK(ink_edge(274,106,318,49,true)>=0 && shade_box(596,106,18,49,255));
+    CHECK(shade_box(596,704,18,48,255));
+    CHECK(shade_box(450,335,180,35,255));
+    CHECK(ink_edge(274,210,356,30,true)>=0 && shade_box(360,210,270,30,255));
+    CHECK(shade_box(54,706,56,76,255) && shade_box(128,762,464,24,255));
+    CHECK(ink_edge(54,819,576,65,true)>=0 && shade_box(128,900,464,100,255));
     CHECK(!font->errors);
 
     CHECK(!thingsos_home_stats_build(&records,0,0,&stats));
     memset(pixels,255,sizeof(pixels));
     thingsos_home_draw(font,&canvas,&stats,NULL,0,false,NULL,NULL);
-    CHECK(ink_edge(54,200,540,110,true)>=0 && ink_edge(54,805,576,65,true)>=0);
-    for (unsigned i = 0; i < 84; ++i) CHECK(shade_box(311+(int)(i/7)*27,454+(int)(i%7)*27,22,22,238));
+    CHECK(ink_edge(54,216,540,110,true)>=0 && ink_edge(54,819,576,65,true)>=0);
+    for (unsigned i = 0; i < 84; ++i) CHECK(shade_box(311+(int)(i/7)*27,470+(int)(i%7)*27,22,22,238));
     thingsos_draw_nav(font,&canvas,0);
     CHECK(!font->errors && write_preview(output,"home-preview-empty.pgm"));
     return true;

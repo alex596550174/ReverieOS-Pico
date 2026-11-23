@@ -2,6 +2,7 @@
 #include "thingsos/tilt.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"tilt:%d: %s\n",__LINE__,#x);exit(1);}} while(0)
 static uint64_t ms;
 static int chip_feed(thingsos_tilt_t* s,int rx,int ry,int rz,unsigned n) {

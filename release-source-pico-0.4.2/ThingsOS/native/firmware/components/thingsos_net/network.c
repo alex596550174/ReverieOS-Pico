@@ -988,7 +988,7 @@ static esp_err_t diagnostic_download(httpd_req_t* req) {
     version[length] = '\0';
     char disposition[96];
     snprintf(disposition, sizeof(disposition),
-             "attachment; filename=\"ThingsOS-diagnostics-Read-Pico-%s.json\"",
+             "attachment; filename=\"ReverieOS-diagnostics-Read-Pico-%s.json\"",
              length ? version : "unknown");
     httpd_resp_set_type(req,"application/json");
     httpd_resp_set_hdr(req,"Cache-Control","no-store");

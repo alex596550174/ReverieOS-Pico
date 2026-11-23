@@ -1,36 +1,95 @@
 """Validate development build inputs and artifacts; no hardware or originality certificate."""
 from pathlib import Path
-import hashlib, json, subprocess, re
-native = Path(__file__).resolve().parent
-workspace = native.parents[1]
-build = native.parent / 'build/native-idf'
-rescue = native.parent / 'build/native-rescue'
+import hashlib, json, re, shutil, subprocess, sys
+
+from pico_release import (BUILD as build, NATIVE as native, RESCUE as rescue, SNAPSHOT as workspace,
+                          checked_images, read_json, release_configuration, require, validation_records)
+
+if not __debug__:
+    raise SystemExit('Run verify_build.py without Python optimization to retain the upstream checks.')
+
+release_config = release_configuration()
 official = workspace / 'references/read-pico-official'
-expected = json.loads((native.parent / 'upstream-sources.json').read_text(encoding='utf-8'))['official']['commit']
+snapshot = read_json(workspace / 'SOURCE-RELEASE.json')
+expected = read_json(native.parent / 'upstream-sources.json')['official']['commit']
+require(expected == snapshot['read_pico_bsp_commit'], 'Read Pico BSP provenance differs from SOURCE-RELEASE.json.')
+
+
 def run(args):
-    return subprocess.run([str(a) for a in args],check=True,capture_output=True,text=True,encoding='utf-8',errors='replace').stdout.strip()
-assert run(['git','-C',official,'rev-parse','HEAD']) == expected
-assert not run(['git','-C',official,'status','--porcelain']), 'Official BSP checkout changed'
-run([workspace / '.tools/host-python/Scripts/python.exe', native / 'prepare_dependencies.py'])
-run([workspace / '.tools/host-python/Scripts/python.exe', native / 'generate_ime.py','--check'])
-keyboard_assets=native/'firmware/main/assets'
-keyboard_meta=json.loads((keyboard_assets/'keyboard-sans.json').read_text(encoding='utf-8'))
-assert hashlib.sha256((keyboard_assets/'keyboard-sans.ttf').read_bytes()).hexdigest()==keyboard_meta['sha256']
-assert hashlib.sha256((official/'sdcard/fonts/ChillDuanSansVF.ttf').read_bytes()).hexdigest()==keyboard_meta['source_sha256']
-assert (keyboard_assets/'OFL-Keyboard-Sans.txt').read_bytes()==(official/'sdcard/fonts/OFL.txt').read_bytes()
+    return subprocess.run([str(a) for a in args], check=True, capture_output=True,
+                          text=True, encoding='utf-8', errors='replace').stdout.strip()
+
+
+def check_snapshot_paths(*paths):
+    relative = [path.relative_to(workspace) for path in paths]
+    revision = release_config['source_snapshot_commit']
+    require(all(run(['git', '-C', workspace, 'ls-tree', '-r', revision, '--', path]) for path in relative),
+            'The trusted upstream snapshot does not contain the expected export.')
+    subprocess.run(['git', '-C', str(workspace), 'diff', '--exit-code', revision, '--',
+                    *map(str, relative)], check=True)
+    require(not run(['git', '-C', workspace, 'ls-files', '--others', '--', *relative]),
+            'The trusted upstream snapshot contains extra local files.')
+
+
+keyboard_assets = native / 'firmware/main/assets'
+keyboard_files = [keyboard_assets / name for name in ('keyboard-sans.json', 'keyboard-sans.ttf',
+                                                       'OFL-Keyboard-Sans.txt')]
+keyboard_meta = read_json(keyboard_files[0])
+require(keyboard_meta['source_commit'] == expected, 'Keyboard font BSP provenance differs.')
+require(hashlib.sha256(keyboard_files[1].read_bytes()).hexdigest() == keyboard_meta['sha256'],
+        'Bundled keyboard font differs from its recorded SHA-256.')
+snapshot_export = not (official / '.git').exists()
+if snapshot_export:
+    # The source release only exports the BSP needed by Read Pico. Verify those
+    # exact files and the bundled font and license against the upstream release.
+    check_snapshot_paths(official, *keyboard_files)
+else:
+    require(run(['git', '-C', official, 'rev-parse', 'HEAD']) == expected, 'Wrong official BSP checkout commit.')
+    require(not run(['git', '-C', official, 'status', '--porcelain']), 'Official BSP checkout changed.')
+    originals = official / 'sdcard/fonts'
+    require(hashlib.sha256((originals / 'ChillDuanSansVF.ttf').read_bytes()).hexdigest() == keyboard_meta['source_sha256'],
+            'Upstream keyboard font differs from the source SHA-256.')
+    require(keyboard_files[2].read_bytes() == (originals / 'OFL.txt').read_bytes(),
+            'Keyboard font license differs from the official BSP checkout.')
+
+main_description = build / 'project_description.json'
+rescue_description = rescue / 'project_description.json'
+if not main_description.is_file() or not rescue_description.is_file():
+    raise SystemExit('Build the ReverieOS main and rescue firmware with reverie_build.py before validating.')
+
+metadata = read_json(main_description)
+rescue_metadata = read_json(rescue_description)
+idf = Path(metadata['idf_path']).resolve()
+require(idf.is_dir() and run(['git', '-C', idf, 'rev-parse', 'HEAD']) == release_config['esp_idf_commit'],
+        'The main build does not use the pinned ESP-IDF checkout.')
+require(Path(metadata['project_path']).resolve() == native / 'firmware',
+        'The main build was configured from a different source directory.')
+require(Path(rescue_metadata['idf_path']).resolve() == idf and
+        Path(rescue_metadata['project_path']).resolve() == native / 'rescue',
+        'The rescue build was configured from a different source directory or SDK.')
+run([sys.executable, native / 'prepare_dependencies.py'])
+run([sys.executable, native / 'generate_ime.py', '--check'])
 assert 'app.ripple_enabled=false;' in (native/'firmware/main/main.c').read_text(encoding='utf-8')
 assert '.bcdDevice=0x0402' in (native/'firmware/components/thingsos_board/usb_storage.c').read_text(encoding='utf-8')
-test_output = run([workspace / '.tools/idf-tools/tools/cmake/4.0.3/bin/ctest.exe','--test-dir',native.parent / 'build/native-host-cmake','--output-on-failure'])
+ctest = shutil.which('ctest') or workspace / '.tools/idf-tools/tools/cmake/4.0.3/bin/ctest.exe'
+test_output = run([ctest, '--test-dir', native.parent / 'build/native-host-cmake', '--output-on-failure'])
 required_tests = {'runtime','ota_failure_paths','single_slot_failure_paths','font_psram_pool','online_download_resume','network_service_lifecycle','keyboard_files_persistence','browser_http_sha256',
-    'reader_image_ui','epub_font_images_guard','device_ui_controller','display_pack_thumbnail_cache','weidu_workflow','weidu_notes_progress_time',
+    'reader_image_ui','epub_font_images_guard','display_pack_thumbnail_cache','weidu_workflow','weidu_notes_progress_time',
     'stagger_waveform_failure_paths','usb_disk_ownership_io','online_release_manifest','browser_image_prepare',
     'epub_mimetype_compat','epub_large_compilation','epub_capacity_guards',
     'epub_10240_boundaries','reader_image_fragmented_psram','pico_low_memory_policy',
     'epub_allocation_rollback','reader_partial_index_recovery','reader_network_bounded_waits',
     'weidu_cache_cancel_boundaries','rescue_no_psram_fallback',
     'epub_illustrated_live_psram','webp_alpha_pixel_equivalence','progressive_jpeg_gray_equivalence',
-    'diagnostics_storage_and_reboot','ble_hid_reports','cubox_cache_and_protocol','weidu_offline_time_recovery','flomo_protocol_mcp','pclk_recovery_policy'}
-assert '100% tests passed' in test_output and required_tests <= set(re.findall(r'Test\s+#\d+: (\S+)',test_output))
+    'ble_hid_reports','cubox_cache_and_protocol','weidu_offline_time_recovery','flomo_protocol_mcp','pclk_recovery_policy','pico_release_layout'}
+if sys.platform in ('win32', 'darwin'):
+    required_tests.add('device_ui_controller')
+if sys.platform == 'win32':
+    required_tests.add('diagnostics_storage_and_reboot')
+passed = set(re.findall(r'Test\s+#\d+: (\S+)', test_output))
+missing = required_tests - passed
+require('100% tests passed' in test_output and not missing,
+        f'Host regression is incomplete. Missing tests: {sorted(missing)}.')
 # Target frame evidence plus a reproducible patch of the pinned original.
 from patch_freetype_pool import generate as generate_font_pool
 from patch_webp_alpha import generate as generate_webp_alpha
@@ -62,9 +121,9 @@ for directory in (build,rescue):
     assert frame+8192<=prefetch_budget, 'Raster caller headroom exceeded'
     raster_stack_frames.append(frame)
 names = ['read_pico','epdiy','e0470_epaper_waveform','cst836u','fca9555','sy7636a','read_pico_pmu','sc7a20h','pwm_audio']
-allowed = [native.resolve(), (workspace / '.tools/esp-idf').resolve()] + [(official / 'components' / n).resolve() for n in names]
+allowed = [native.resolve(), idf] + [(official / 'components' / n).resolve() for n in names]
 from patch_esp_tls import patched_source
-idf_tls_source = workspace/'.tools/esp-idf/components/esp-tls/esp_tls.c'
+idf_tls_source = idf/'components/esp-tls/esp_tls.c'
 patched_tls = build/'thingsos-esp-tls/esp_tls.c'
 assert patched_tls.read_bytes() == patched_source(idf_tls_source), 'Stale ESP-TLS async select fix'
 inventory = []
@@ -112,28 +171,15 @@ for project in ('firmware','rescue'):
         assert wifi_dynamic == 0 or wifi_dynamic >= wifi_static
     else:
         assert 'CONFIG_SPIRAM_IGNORE_NOTFOUND=y' in config, 'Rescue retains no-PSRAM recovery'
-images = []
-for image, offset, capacity, project in [
-    (build/'ThingsOS_native.bin',0x220000,0xae0000,'ThingsOS_native'),
-    (rescue/'ThingsOS_rescue.bin',0x20000,0x200000,'ThingsOS_rescue'),
-    (build/'system_font.bin',0xd00000,0x300000,None),
-    (build/'bootloader/bootloader.bin',0,0x8000,None),
-    (build/'partition_table/partition-table.bin',0x8000,0x1000,None)]:
-    data = image.read_bytes(); assert 0 < len(data) <= capacity
-    if project:
-        assert data[0] == 0xe9
-        assert data[80:112].split(b'\0',1)[0].decode() == project
-        assert data[48:80].split(b'\0',1)[0].decode() == '0.4.2', 'Release version must match the website'
-    images.append({'file':str(image),'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'development_offset':hex(offset),'capacity':capacity})
-font = (build/'system_font.bin').read_bytes(); original=(workspace/'fonts/方正屏显雅宋.TTF').read_bytes()
+inputs = checked_images(release_config)
+images = validation_records(inputs)
+font = inputs['system-font'][3]; original=(workspace/'fonts/方正屏显雅宋.TTF').read_bytes()
 root_pem = (native/'firmware/components/thingsos_weidu/certs/weread_root.pem').read_text(encoding='ascii').strip()
-trusted_store = (workspace/'.tools/esp-idf/components/mbedtls/esp_crt_bundle/cacrt_all.pem').read_text(encoding='utf-8')
+trusted_store = (idf/'components/mbedtls/esp_crt_bundle/cacrt_all.pem').read_text(encoding='utf-8')
 assert root_pem in trusted_store, 'WeRead CA must come from the trusted SDK root store'
 root_pem_bytes = (native/'firmware/components/thingsos_weidu/certs/weread_root.pem').read_bytes().strip()
-assert root_pem_bytes in (build/'ThingsOS_native.bin').read_bytes(), 'Full WeRead CA not embedded in application'
+assert root_pem_bytes in inputs['app'][3], 'Full WeRead CA not embedded in application'
 assert font[:8]==b'THFONT01' and font[48:]==original and font[12:44]==hashlib.sha256(original).digest()
-assert (build/'partition_table/partition-table.bin').read_bytes()==(rescue/'partition_table/partition-table.bin').read_bytes()
-assert json.loads((build/'flasher_args.json').read_text())['app']['offset']=='0x220000'
 assert 'thingsos_device_acceptance_required' not in (build/'build.ninja').read_text(encoding='utf-8')
 assert 'usb-bundle' in (build/'build.ninja').read_text(encoding='utf-8')
 assert 'CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y' in (native/'firmware/sdkconfig').read_text()
@@ -142,14 +188,6 @@ rescue_config=(rescue/'config/sdkconfig.h').read_text()
 assert re.search(r'^#define CONFIG_BT_NIMBLE_MAX_CONNECTIONS 1$',main_config,re.M)
 assert re.search(r'^#define CONFIG_BT_CTRL_BLE_MAX_ACT_EFF 2$',main_config,re.M)
 assert not re.search(r'^#define CONFIG_BT_ENABLED 1$',rescue_config,re.M)
-usb_args=json.loads((build/'flasher_args.json').read_text())
-assert set(usb_args['flash_files'])=={'0x0','0x8000','0xf000','0x20000','0x220000','0xd00000'}
-assert usb_args['otadata']['file']=='ota_data_usb.bin'
-selector=(build/'ota_data_usb.bin').read_bytes()
-import struct
-assert len(selector)==8192 and struct.unpack_from('<I',selector)[0]==1
-assert struct.unpack_from('<II',selector,24)==(0,0x4743989a)
-assert selector[32:]==b'\xff'*(8192-32)
 decoder=(native/'src/image_decode.c').read_text()
 assert 'heap_caps_malloc(n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)' in decoder
 assert 'heap_caps_realloc(p,n,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT)' in decoder
@@ -170,7 +208,7 @@ assert 'esp_wifi_scan_start(&config, true)' not in network
 assert 'ap_ssid[]=THINGSOS_AP_SSID, ap_password[]=THINGSOS_AP_PASSWORD' in network
 network_ui=(native/'firmware/main/network_ui.inc').read_text(encoding='utf-8')
 assert 'wifi_scan_pending && !app.wifi_scan_running && !app.dirty' in network_ui
-report = {'scope':'Independent module integration release build','version':'0.4.2','firmware_ready':False,
+report = {'scope':'Independent module integration release build','version':release_config['version'],'rescue_version':release_config['rescue_version'],'firmware_ready':False,
     'wifi_page_scan_async':True,'wifi_scan_after_first_frame':True,'wifi_scan_cache_ms':30000,
     'ap_ssid':'ThingsOS','ap_password_bytes':8,
     'font_gray_pool_psram_bytes':raster_pool,'main_stack_bytes':24576,'prefetch_stack_budget_bytes':prefetch_budget,'target_raster_stack_frames':raster_stack_frames,

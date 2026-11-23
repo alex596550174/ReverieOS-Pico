@@ -98,14 +98,18 @@ void thingsos_home_format_duration(uint64_t ms, char* n1, size_t c1, char* u1, s
     }
 }
 
-enum { LEFT = 30, RIGHT = 654, CONTINUE_Y = 120, CONTINUE_END = 388,
-       STATS_Y = 408, STATS_END = 656, RECENT_Y = 678, ROW = 104,
-       ENTRIES_Y = 990, RECENT_END = 1063, SPLIT = 342,
-       GRID_X = 311, GRID_Y = 454, GRID_END = 638, ARROW_HALF = 6,
-       CARD_BORDER_SHADE = 136, ENTRY_INK_SHADE = 85 };
+enum { LEFT = 30, RIGHT = 654, CONTENT_SHIFT = 16,
+       COVER_X = 54, COVER_Y = 94 + CONTENT_SHIFT, COVER_WIDTH = 194, COVER_HEIGHT = 277,
+       CONTINUE_END = 388 + CONTENT_SHIFT,
+       STATS_Y = 408 + CONTENT_SHIFT, STATS_END = 656 + CONTENT_SHIFT,
+       RECENT_Y = 676 + CONTENT_SHIFT, ROW = 104,
+       ENTRIES_Y = RECENT_Y + THINGSOS_HOME_RECENT_LIMIT * ROW,
+       RECENT_END = ENTRIES_Y + 73, SPLIT = 342,
+       GRID_X = 311, GRID_Y = 454 + CONTENT_SHIFT, GRID_END = 638 + CONTENT_SHIFT,
+       ARROW_HALF = 6, SECTION_RULE_SHADE = 170, ENTRY_INK_SHADE = 85 };
 
 thingsos_home_action_t thingsos_home_hit(int x, int y) {
-    if (x < LEFT || x >= RIGHT || y < CONTINUE_Y || y >= RECENT_END) return THINGSOS_HOME_NONE;
+    if (x < LEFT || x >= RIGHT || y < COVER_Y || y >= RECENT_END) return THINGSOS_HOME_NONE;
     if (y < CONTINUE_END) return THINGSOS_HOME_CONTINUE;
     if (y >= STATS_Y && y < STATS_END) return THINGSOS_HOME_STATS;
     if (y < RECENT_Y) return THINGSOS_HOME_NONE;
@@ -147,34 +151,39 @@ static unsigned book_percent(const thingsos_home_book_t* book) {
 
 static void draw_continue(thingsos_font_t* font, thingsos_canvas_t* canvas, const thingsos_home_book_t* book,
                           bool sd_ready, thingsos_home_cover_fn cover, void* context) {
-    outline(canvas, LEFT, CONTINUE_Y, RIGHT - LEFT, CONTINUE_END - CONTINUE_Y, CARD_BORDER_SHADE);
-    draw_chevron(canvas, 624, 174, ARROW_HALF);
     if (!book) {
-        text(font, canvas, sd_ready ? "暂无阅读记录" : "未检测到 SD 卡", 28, 54, 248, 540);
-        text(font, canvas, "点击进入本地书库", 22, 54, 296, 540);
+        draw_chevron(canvas, 624, 174 + CONTENT_SHIFT, ARROW_HALF);
+        text(font, canvas, sd_ready ? "暂无阅读记录" : "未检测到 SD 卡", 28, 54, 248 + CONTENT_SHIFT, 540);
+        text(font, canvas, "点击进入本地书库", 22, 54, 296 + CONTENT_SHIFT, 540);
         return;
     }
-    if (cover) cover(context, canvas, 0, 54, 144, 154, 220);
-    text(font, canvas, book->title, 40, 236, 188, 356);
-    text(font, canvas, book->subtitle, 24, 236, 248, 394);
+    if (cover) cover(context, canvas, 0, COVER_X, COVER_Y, COVER_WIDTH, COVER_HEIGHT);
+    const int label_x = 274, content_right = 630, title_width = 592 - label_x;
+    int title_top = -32, title_bottom = 0;
+    thingsos_font_size(font, 40);
+    thingsos_text_ink_box(font, book->title, title_width, NULL, NULL, &title_top, &title_bottom, NULL);
+    int title_y = COVER_Y - title_top;
+    draw_chevron(canvas, 624, title_y + (title_top + title_bottom) / 2, ARROW_HALF);
+    text(font, canvas, book->title, 40, label_x, title_y, title_width);
+    text(font, canvas, book->subtitle, 24, label_x, title_y + 59, content_right - label_x);
+
     char line[64];
     if (book->pages) snprintf(line, sizeof(line), "%s · %u 页", book->format, book->pages);
     else snprintf(line, sizeof(line), "%s", book->format);
-    text(font, canvas, line, 20, 236, 280, 394);
+    text(font, canvas, line, 20, label_x, title_y + 94, content_right - label_x);
+
+    const int bar_height = 8, bar_y = COVER_Y + COVER_HEIGHT - bar_height;
+    const int progress_baseline = bar_y - 11, bar_width = content_right - label_x;
     unsigned percent = book_percent(book);
-    snprintf(line, sizeof(line), "%u", percent);
-    thingsos_font_size(font, 34);
-    int advance = 0;
-    thingsos_text_ink_box(font, line, 100, NULL, NULL, NULL, NULL, &advance);
-    text(font, canvas, line, 34, 236, 338, 100);
-    text(font, canvas, "%", 22, 240 + advance, 338, 30);
+    snprintf(line, sizeof(line), "%u%%", percent);
+    text(font, canvas, line, 30, label_x, progress_baseline, 100);
     if (book->page) {
         snprintf(line, sizeof(line), "第 %u 页", book->page);
         thingsos_font_size(font, 22);
-        thingsos_label_right(font, canvas, line, 450, 338, 180);
+        thingsos_label_right(font, canvas, line, 450, progress_baseline, content_right - 450);
     }
-    thingsos_rect(canvas, 236, 354, 394, 10, 220);
-    thingsos_rect(canvas, 236, 354, (int)(394 * percent / 100), 10, 0);
+    thingsos_rect(canvas, label_x, bar_y, bar_width, bar_height, 220);
+    thingsos_rect(canvas, label_x, bar_y, (int)(bar_width * percent / 100), bar_height, 0);
 }
 
 typedef struct { char text[24]; unsigned size; int x, width, bottom; } metric_part_t;
@@ -200,8 +209,7 @@ static void draw_duration(thingsos_font_t* font, thingsos_canvas_t* canvas, uint
 }
 
 static void draw_stats(thingsos_font_t* font, thingsos_canvas_t* canvas, const thingsos_home_stats_t* stats) {
-    outline(canvas, LEFT, STATS_Y, RIGHT - LEFT, STATS_END - STATS_Y, CARD_BORDER_SHADE);
-    const int arrow_center = 435;
+    const int arrow_center = 435 + CONTENT_SHIFT;
     draw_chevron(canvas, 624, arrow_center, ARROW_HALF);
     static const char* const labels[] = {"今日阅读", "本周已读", "本月已读"};
     const uint64_t durations[] = {stats->today_ms, stats->week_ms, stats->month_ms};
@@ -255,7 +263,6 @@ static void draw_home_entry(thingsos_font_t* font, thingsos_canvas_t* canvas, co
 
 static void draw_recent(thingsos_font_t* font, thingsos_canvas_t* canvas, const thingsos_home_book_t* books,
                         size_t count, thingsos_home_cover_fn cover, void* context) {
-    outline(canvas, LEFT, RECENT_Y, RIGHT - LEFT, RECENT_END - RECENT_Y, CARD_BORDER_SHADE);
     for (size_t i = 0; i < THINGSOS_HOME_RECENT_LIMIT; ++i) {
         int row_y = RECENT_Y + (int)i * ROW;
         size_t index = thingsos_home_book_index((thingsos_home_action_t)(THINGSOS_HOME_RECENT_0 + i));
@@ -275,13 +282,13 @@ static void draw_recent(thingsos_font_t* font, thingsos_canvas_t* canvas, const 
     }
     if (count <= 1) {
         thingsos_font_size(font, 28);
-        thingsos_label_centered(font, canvas, count ? "暂无其他最近阅读" : "暂无最近阅读", 54, 844, 576);
+        thingsos_label_centered(font, canvas, count ? "暂无其他最近阅读" : "暂无最近阅读", 54, RECENT_Y + 166, 576);
     }
-    thingsos_rect(canvas, SPLIT, 1004, 1, 45, 210);
+    thingsos_rect(canvas, SPLIT, ENTRIES_Y + 14, 1, 45, 210);
     draw_home_entry(font, canvas, "本地", 54, 318);
     draw_home_entry(font, canvas, "微读", 366, 624);
-    fade_region(canvas, 32, 992, 309, 70, ENTRY_INK_SHADE);
-    fade_region(canvas, 344, 992, 309, 70, ENTRY_INK_SHADE);
+    fade_region(canvas, 32, ENTRIES_Y + 2, 309, 70, ENTRY_INK_SHADE);
+    fade_region(canvas, 344, ENTRIES_Y + 2, 309, 70, ENTRY_INK_SHADE);
 }
 
 void thingsos_home_draw(thingsos_font_t* font, thingsos_canvas_t* canvas, const thingsos_home_stats_t* stats,
@@ -294,6 +301,8 @@ void thingsos_home_draw(thingsos_font_t* font, thingsos_canvas_t* canvas, const 
     draw_continue(font, canvas, count ? books : NULL, sd_ready, cover, context);
     draw_stats(font, canvas, stats);
     draw_recent(font, canvas, books, count, cover, context);
+    thingsos_rect(canvas, 36, (CONTINUE_END + STATS_Y) / 2, 612, 1, SECTION_RULE_SHADE);
+    thingsos_rect(canvas, 36, (STATS_END + RECENT_Y) / 2, 612, 1, SECTION_RULE_SHADE);
     thingsos_font_weight(font, previous_weight);
     font->ui_size_percent = scale;
     font->ui_weight_override = weight;
