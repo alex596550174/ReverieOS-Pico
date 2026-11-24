@@ -19,7 +19,7 @@ macOS CTest **53/53** 通过，主应用与独立救援构建成功。完整 USB
 | `ReverieOS-0.4.2-R-1.0.1-ota.bin` | 6,676,800 B | `0bd8aba66eaacce2995d64e9e718e9b58277a729e74d57db5b1c22f3b8c435ee` |
 | `ReverieOS-0.4.2-R-1.0.1-usb.bin` | 16,610,104 B | `e3cb1fadee7d7236c31a97bf2dc0a31ada04403ba8f0d626654d229ecdb0e69b` |
 
-相对 R-1 修改 22 个文件、删除 1 个文件，并新增 7 个源码、配置或工具文件。[逐文件差异](https://github.com/alex596550174/ReverieOS-Pico/compare/98206b97d4ad6e1990ab0a0ff75616675856ebca...pico)
+[查看相对 ThingsOS 上游的逐文件差异](#逐文件差异)。
 
 ### 历史版本
 
@@ -35,18 +35,73 @@ R-1 的已验证主应用为 6,676,032 B，SHA-256 为 `6f9a2d5dbce06c55fbcbdb69
 - 调整 EPUB 章节标题、上一页章内回退、中文标点折行与悬挂，以及 24 / 36 / 54 px 页边距。保留源字节偏移和相应的分页回归。
 - 调整 USB MSC 重枚举、SD 多扇区传输和就绪检测，并补充 macOS Host 测试。直接挂载表现仍需按设备和 SD 卡复验。
 
-### 已发布 R-1 相对 ThingsOS 0.4.2 的文件差异
+### 逐文件差异
 
-比对基线为 [上游 Read Pico 源码发布提交 `2723571`](https://github.com/flowflic/ThingsOS/tree/2723571f2e0e0ffc98e8e7ca6df8af82609d69d1/release-source-pico-0.4.2)。Pico 快照内共修改 24 个文件、新增 6 个源码或测试文件和 1 个软链。表中路径相对 `release-source-pico-0.4.2/ThingsOS/native/`。
+当前版本相对 [ThingsOS 上游 Read Pico 0.4.2 源码快照](https://github.com/flowflic/ThingsOS/tree/2723571f2e0e0ffc98e8e7ca6df8af82609d69d1/release-source-pico-0.4.2)共 修改 35 项、新增 14 项、删除 1 项。每次发布以该版本所用的 ThingsOS 上游源码提交为基线。以下路径以 `release-source-pico-0.4.2/` 为根，统计范围为 Read Pico 快照。
 
-| 范围 | 文件 |
+<details>
+<summary>展开文件清单</summary>
+
+| 状态 | 路径 |
 | --- | --- |
-| 构建、板级与网络 | `CMakeLists.txt`、`firmware/components/thingsos_board/tusb_config.h`、`firmware/components/thingsos_board/usb_storage.c`、`firmware/components/thingsos_core/CMakeLists.txt`、`firmware/components/thingsos_net/network.c`、`firmware/components/thingsos_net/network.h` |
-| 阅读界面、微读和应用流程 | `firmware/main/features.inc`、`firmware/main/lock_pin.inc`、`firmware/main/main.c`、`firmware/main/reader_cache.inc`、`firmware/main/stats_ui.inc`、`firmware/main/weidu_online_ui.inc`、`firmware/main/weidu_ui.inc` |
-| 排版、分页、EPUB 和 UI 模块 | `include/thingsos/pagination.h`、`include/thingsos/reader_ui.h`、`include/thingsos/ui.h`、`src/epub.c`、`src/graphics.c`、`src/pagination.c`、`src/reader_ui.c`、`include/thingsos/home_ui.h`、`src/home_ui.c` |
-| 回归用例与 vendor 清单 | `tests/content_test.c`、`tests/device_ui_stubs.h`、`tests/device_ui_test.c`、`vendor/sources.json`、`tests/clreq_test.c`、`tests/epub_heading_prev_test.c`、`tests/home_ui_test.c`、`tests/reader_ui_test.c` |
+| 修改 | `ThingsOS/native/CMakeLists.txt` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_board/tusb_config.h` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_board/usb_storage.c` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_core/CMakeLists.txt` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_net/network.c` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_net/network.h` |
+| 修改 | `ThingsOS/native/firmware/components/thingsos_net/web.html` |
+| 修改 | `ThingsOS/native/firmware/main/features.inc` |
+| 修改 | `ThingsOS/native/firmware/main/lock_pin.inc` |
+| 修改 | `ThingsOS/native/firmware/main/main.c` |
+| 修改 | `ThingsOS/native/firmware/main/pico_controls_ui.inc` |
+| 修改 | `ThingsOS/native/firmware/main/reader_cache.inc` |
+| 修改 | `ThingsOS/native/firmware/main/stats_ui.inc` |
+| 删除 | `ThingsOS/native/firmware/main/status_power.inc` |
+| 修改 | `ThingsOS/native/firmware/main/weidu_online_ui.inc` |
+| 修改 | `ThingsOS/native/firmware/main/weidu_ui.inc` |
+| 新增 | `ThingsOS/native/include/thingsos/home_ui.h` |
+| 修改 | `ThingsOS/native/include/thingsos/pagination.h` |
+| 修改 | `ThingsOS/native/include/thingsos/reader_ui.h` |
+| 修改 | `ThingsOS/native/include/thingsos/ui.h` |
+| 修改 | `ThingsOS/native/package_usb.py` |
+| 新增 | `ThingsOS/native/pico_release.py` |
+| 新增 | `ThingsOS/native/reverie-release.json` |
+| 新增 | `ThingsOS/native/reverie_build.py` |
+| 修改 | `ThingsOS/native/src/epub.c` |
+| 修改 | `ThingsOS/native/src/graphics.c` |
+| 新增 | `ThingsOS/native/src/home_ui.c` |
+| 修改 | `ThingsOS/native/src/pagination.c` |
+| 修改 | `ThingsOS/native/src/reader_ui.c` |
+| 修改 | `ThingsOS/native/src/webp_decoder.c` |
+| 新增 | `ThingsOS/native/tests/clreq_test.c` |
+| 修改 | `ThingsOS/native/tests/content_test.c` |
+| 新增 | `ThingsOS/native/tests/device_ui_macos.h` |
+| 修改 | `ThingsOS/native/tests/device_ui_stubs.h` |
+| 修改 | `ThingsOS/native/tests/device_ui_test.c` |
+| 新增 | `ThingsOS/native/tests/epub_heading_prev_test.c` |
+| 新增 | `ThingsOS/native/tests/home_ui_test.c` |
+| 新增 | `ThingsOS/native/tests/host_files.h` |
+| 新增 | `ThingsOS/native/tests/pico_release_test.py` |
+| 修改 | `ThingsOS/native/tests/reader_http_test.c` |
+| 新增 | `ThingsOS/native/tests/reader_ui_test.c` |
+| 修改 | `ThingsOS/native/tests/stagger_test.c` |
+| 修改 | `ThingsOS/native/tests/tilt_test.c` |
+| 修改 | `ThingsOS/native/tests/weidu_cancel_test.c` |
+| 修改 | `ThingsOS/native/tests/weidu_mp_test.c` |
+| 修改 | `ThingsOS/native/tests/weidu_reading_test.c` |
+| 新增 | `ThingsOS/native/tools/flash_pico_mac.sh` |
+| 修改 | `ThingsOS/native/vendor/sources.json` |
+| 修改 | `ThingsOS/native/verify_build.py` |
+| 新增 | `fonts` |
 
-新增文件是 `include/thingsos/home_ui.h`、`src/home_ui.c`、`tests/clreq_test.c`、`tests/epub_heading_prev_test.c`、`tests/home_ui_test.c`、`tests/reader_ui_test.c`。另在快照根新增 `fonts → ThingsOS/fonts`，供资产生成脚本定位字体。
+</details>
+
+在含有上游基线提交的本地 Git 仓库中，可查看具体改动。
+
+```sh
+git diff 2723571f2e0e0ffc98e8e7ca6df8af82609d69d1 HEAD -- release-source-pico-0.4.2/
+```
 
 ## 从其他系统通过 USB 安装
 
